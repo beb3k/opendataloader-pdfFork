@@ -1,0 +1,36 @@
+name: Harness
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'docs/**'
+      - 'scripts/check_boundaries.py'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+      - '.github/workflows/harness.yml'
+      - 'java/**'
+      - 'python/**'
+      - 'node/**'
+      - 'apps/**'
+      - 'content/docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run harness checks
+        run: python scripts/check_boundaries.py

@@ -14,6 +14,10 @@ Resolves #
 
 **Checklist:**
 
+- [ ] I updated `AGENTS.md` or the linked docs if I changed repo structure, ownership boundaries, or validation flow.
+- [ ] I ran `npm run sync` if I changed Java CLI options.
+- [ ] I ran the narrowest validation that proves my change works, or I explained why I could not.
+- [ ] I ran the benchmark or explained why it was not needed for parser behavior changes.
 - [ ] Documentation has been updated, if necessary.
 - [ ] Examples have been added, if necessary.
 - [ ] Tests have been added, if necessary.

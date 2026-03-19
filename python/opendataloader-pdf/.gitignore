@@ -6,8 +6,7 @@ build/
 # Ignore JAR file
 *.jar
 
-# Docs
-README.md
+# Packaging docs copied during release builds
 LICENSE
 NOTICE
 THIRD_PARTY/
