@@ -1,0 +1,25 @@
+[project]
+name = "opendataloader-pdf-local-ui-backend"
+version = "0.1.0"
+description = "Local backend for the OpenDataLoader PDF browser UI."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "opendataloader-pdf>=2.0.0",
+    "python-multipart>=0.0.9",
+    "uvicorn>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.28.0",
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
