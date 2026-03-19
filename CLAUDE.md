@@ -1,18 +1,11 @@
 # CLAUDE.md
 
-## Gotchas
+Read [AGENTS.md](AGENTS.md) first. It is the canonical repo map.
 
-After changing CLI options in Java, **must** run `npm run sync` — this regenerates `options.json` and all Python/Node.js bindings. Forgetting this silently breaks the wrappers.
+## Review Focus
 
-When using `--enrich-formula` or `--enrich-picture-description` on the hybrid server, the client **must** use `--hybrid-mode full`. Otherwise enrichments are silently skipped (they only run on the backend, not in Java).
-
-## Conventions
-
-`content/docs/` auto-syncs to opendataloader.org on release. Edits here go live.
-
-## Benchmark
-
-- `/bench` — Run benchmark and analyze results
-- `/bench-debug <doc_id>` — Debug specific document failures
-- CI fails if scores drop below `tests/benchmark/thresholds.json`
-- Metrics: **NID** (reading order), **TEDS** (table structure), **MHS** (heading structure), **Table Detection F1**, **Speed**
+- Use [docs/architecture/LAYERS.md](docs/architecture/LAYERS.md) for package boundaries.
+- Use [docs/guides/AGENT_REVIEW.md](docs/guides/AGENT_REVIEW.md) for validation and escalation rules.
+- If Java CLI options changed, confirm `npm run sync` was run.
+- If parsing behavior changed, expect benchmark validation or a clear reason it was skipped.
+- If `content/docs/` changed, review it as release-facing product copy.
