@@ -43,6 +43,18 @@ export function createBrowserApi(baseUrl: string = DEFAULT_BASE_URL): UiApi {
       const response = await fetch(`${baseUrl}/jobs/${encodeURIComponent(id)}`);
       return readJson<JobRecord>(response);
     },
+    async readFileText(jobId: string, name: string): Promise<string> {
+      const response = await fetch(
+        `${baseUrl}/jobs/${encodeURIComponent(jobId)}/files/${encodePathSegments(name)}`,
+      );
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Request failed with ${response.status}`);
+      }
+
+      return response.text();
+    },
     downloadFileUrl(jobId: string, name: string): string {
       return `${baseUrl}/jobs/${encodeURIComponent(jobId)}/files/${encodePathSegments(name)}`;
     },

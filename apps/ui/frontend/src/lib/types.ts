@@ -56,6 +56,7 @@ export interface JobRecord {
 export interface UiApi {
   createJob(file: File, options: ComposeOptions): Promise<JobRecord>;
   getJob(id: string): Promise<JobRecord>;
+  readFileText(jobId: string, name: string): Promise<string>;
   downloadFileUrl(jobId: string, name: string): string;
   downloadBundleUrl(jobId: string): string;
 }

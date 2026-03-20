@@ -1,4 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
+import BoundingBoxPreview, {
+  type ViewerTab,
+  type ViewerTabDefinition,
+} from "./components/BoundingBoxPreview";
 import { createBrowserApi } from "./lib/api";
 import { readSessionFlag, writeSessionFlag } from "./lib/session";
 import type {
@@ -8,12 +13,10 @@ import type {
   JobRecord,
   MarkdownStyle,
   OutputFormat,
-  PreviewKind,
   StorageLike,
   UiApi,
 } from "./lib/types";
 import { isPdfFile, validatePageRange } from "./lib/validators";
-import type { Dispatch, RefObject, SetStateAction } from "react";
 
 const DEFAULT_OPTIONS: ComposeOptions = {
   formats: ["markdown", "json"],
@@ -38,7 +41,17 @@ const DEFAULT_OPTIONS: ComposeOptions = {
 };
 
 const STORAGE_KEY = "odl-ui-advanced-open";
+const THEME_STORAGE_KEY = "odl-ui-dark-theme";
 const ADVANCED_PANEL_ANIMATION_MS = 220;
+const VIEWER_TAB_ORDER: ViewerTab[] = ["pdf", "annot", "preview", "html", "markdown", "json"];
+const VIEWER_TAB_LABELS: Record<ViewerTab, string> = {
+  pdf: "PDF",
+  annot: "Annot",
+  preview: "Preview",
+  html: "HTML",
+  markdown: "MD",
+  json: "JSON",
+};
 const FORMAT_CHOICES: Array<{ value: OutputFormat; label: string }> = [
   { value: "markdown", label: "Markdown" },
   { value: "json", label: "JSON" },
@@ -47,23 +60,10 @@ const FORMAT_CHOICES: Array<{ value: OutputFormat; label: string }> = [
   { value: "pdf", label: "PDF" },
 ];
 
-const PREVIEW_ORDER: PreviewKind[] = ["markdown", "json", "html", "text"];
-const PREVIEW_LABELS: Record<PreviewKind, string> = {
-  markdown: "Markdown",
-  json: "JSON",
-  html: "HTML",
-  text: "Text",
-};
-
 interface AppProps {
   api?: UiApi;
   storage?: StorageLike;
   initialJob?: JobRecord;
-}
-
-interface PreviewEntry {
-  kind: PreviewKind;
-  file: JobFile;
 }
 
 export default function App({ api = createBrowserApi(), storage, initialJob }: AppProps) {
@@ -76,12 +76,19 @@ export default function App({ api = createBrowserApi(), storage, initialJob }: A
   const [advancedOpen, setAdvancedOpen] = useState(() =>
     readSessionFlag(backingStorage, STORAGE_KEY),
   );
+  const [isDarkTheme, setIsDarkTheme] = useState(() =>
+    readSessionFlag(backingStorage, THEME_STORAGE_KEY),
+  );
   const [options, setOptions] = useState<ComposeOptions>(DEFAULT_OPTIONS);
-  const [activePreview, setActivePreview] = useState<PreviewKind | null>(null);
+  const [activeViewerTab, setActiveViewerTab] = useState<ViewerTab>("pdf");
 
   useEffect(() => {
     writeSessionFlag(backingStorage, STORAGE_KEY, advancedOpen);
   }, [advancedOpen, backingStorage]);
+
+  useEffect(() => {
+    writeSessionFlag(backingStorage, THEME_STORAGE_KEY, isDarkTheme);
+  }, [backingStorage, isDarkTheme]);
 
   useEffect(() => {
     if (!job) {
@@ -107,13 +114,36 @@ export default function App({ api = createBrowserApi(), storage, initialJob }: A
   }, [api, job]);
 
   const pageRangeError = useMemo(() => validatePageRange(options.pageRange), [options.pageRange]);
-  const previewFiles = useMemo(() => buildPreviewEntries(job?.files ?? []), [job?.files]);
+  const sourceFileUrl = useObjectUrl(selectedFile);
+  const viewerTabs = useMemo(
+    () =>
+      buildViewerTabs({
+        api,
+        job,
+        isSubmitting,
+        sourceFile: selectedFile,
+        sourceFileUrl,
+      }),
+    [api, isSubmitting, job, selectedFile, sourceFileUrl],
+  );
+  const boundingBoxJsonUrl = useMemo(
+    () => viewerTabs.find((tab) => tab.id === "annot")?.dataUrl ?? null,
+    [viewerTabs],
+  );
 
   useEffect(() => {
-    if (!activePreview && previewFiles.length > 0) {
-      setActivePreview(previewFiles[0].kind);
+    setActiveViewerTab(pickPreferredViewerTab(viewerTabs));
+  }, [job?.id, selectedFile]);
+
+  useEffect(() => {
+    const activeDefinition = viewerTabs.find((tab) => tab.id === activeViewerTab);
+
+    if (activeDefinition?.enabled) {
+      return;
     }
-  }, [activePreview, previewFiles]);
+
+    setActiveViewerTab(pickPreferredViewerTab(viewerTabs));
+  }, [activeViewerTab, viewerTabs]);
 
   function updateFormats(format: OutputFormat) {
     setOptions((current) => {
@@ -156,12 +186,12 @@ export default function App({ api = createBrowserApi(), storage, initialJob }: A
     }
 
     setIsSubmitting(true);
+    setActiveViewerTab("pdf");
 
     try {
       const payload = buildSubmissionPayload(options);
       const nextJob = await api.createJob(selectedFile, payload);
       setJob(nextJob);
-      setActivePreview(null);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "Could not start the conversion.");
     } finally {
@@ -183,75 +213,152 @@ export default function App({ api = createBrowserApi(), storage, initialJob }: A
     setAdvancedOpen(false);
   }
 
+  function showLightTheme() {
+    setIsDarkTheme(false);
+  }
+
+  function showDarkTheme() {
+    setIsDarkTheme(true);
+  }
+
+  const showOptionsCard = Boolean(selectedFile);
+  const showResultsCard = Boolean(job) || isSubmitting;
+
   return (
-    <div className="shell">
+    <div
+      className="shell"
+      data-theme={isDarkTheme ? "dark" : "light"}
+      style={{ colorScheme: isDarkTheme ? "dark" : "light" }}
+    >
       <div className="backdrop backdrop-a" />
       <div className="backdrop backdrop-b" />
 
       <header className="hero">
-        <div>
+        <div className="hero-copy">
           <p className="eyebrow">Local browser UI</p>
           <h1>Convert one PDF without leaving the browser.</h1>
           <p className="lede">
-            Upload a single file, choose the outputs you want, and keep the advanced switches out
-            of the way until you need them.
+            Upload a single file, choose the outputs you want, and move through the workflow one
+            step at a time.
           </p>
+
+          <div className="theme-toggle" role="group" aria-label="Color theme">
+            <button
+              type="button"
+              className={`theme-toggle-button ${!isDarkTheme ? "is-active" : ""}`}
+              onClick={showLightTheme}
+              aria-pressed={!isDarkTheme}
+              aria-label="Light theme"
+              title="Light theme"
+            >
+              {"\u2600"}
+            </button>
+            <button
+              type="button"
+              className={`theme-toggle-button ${isDarkTheme ? "is-active" : ""}`}
+              onClick={showDarkTheme}
+              aria-pressed={isDarkTheme}
+              aria-label="Dark theme"
+              title="Dark theme"
+            >
+              {"\u263e"}
+            </button>
+          </div>
         </div>
       </header>
 
-      <main className="workspace">
-        <section className="panel">
-          <StepHeading number="1" title="Upload" summary="Drop in one PDF or browse for it." />
+      <main className="workflow">
+        <WorkflowCard number="1" title="Upload" summary="Drop in one PDF or browse for it.">
           <UploadCard
             file={selectedFile}
             onFile={handleFileChange}
             onDrop={handleFileChange}
             error={fileError}
           />
+        </WorkflowCard>
 
-          <StepHeading
+        {showOptionsCard ? (
+          <WorkflowCard
             number="2"
             title="Options"
-            summary="Keep the common choices visible and the rest one click away."
-          />
-          <OptionsCard
-            options={options}
-            pageRangeError={pageRangeError}
-            onToggleFormat={updateFormats}
-            onChangeOption={setOptions}
-            onOpenAdvanced={openAdvanced}
-            onCloseAdvanced={closeAdvanced}
-            advancedOpen={advancedOpen}
-            onSubmit={handleSubmit}
-            isSubmitting={isSubmitting}
-            onChangeHybrid={updateHybrid}
-          />
-        </section>
+            summary="Choose the outputs and settings before starting the job."
+          >
+            <OptionsCard
+              options={options}
+              pageRangeError={pageRangeError}
+              submitError={submitError}
+              onToggleFormat={updateFormats}
+              onChangeOption={setOptions}
+              onOpenAdvanced={openAdvanced}
+              onCloseAdvanced={closeAdvanced}
+              advancedOpen={advancedOpen}
+              onSubmit={handleSubmit}
+              isSubmitting={isSubmitting}
+              onChangeHybrid={updateHybrid}
+            />
+          </WorkflowCard>
+        ) : null}
 
-        <section className="panel results-panel">
-          <StepHeading
+        {showResultsCard ? (
+          <WorkflowCard
             number="3"
             title="Results"
-            summary="Watch status, preview text outputs, and download every file."
-          />
-          <ResultsCard
-            api={api}
-            job={job}
-            activePreview={activePreview}
-            setActivePreview={setActivePreview}
-            previewFiles={previewFiles}
-            submitError={submitError}
-            onReset={() => {
-              setJob(null);
-              setSelectedFile(null);
-              setFileError(null);
-              setSubmitError(null);
-            }}
-          />
-        </section>
+            summary="This card becomes the viewer as soon as the job starts."
+          >
+            <ResultsCard
+              job={job}
+              isSubmitting={isSubmitting}
+              sourceFile={selectedFile}
+              boundingBoxJsonUrl={boundingBoxJsonUrl}
+              activeViewerTab={activeViewerTab}
+              setActiveViewerTab={setActiveViewerTab}
+              tabs={viewerTabs}
+              submitError={submitError}
+              onReset={() => {
+                setJob(null);
+                setSelectedFile(null);
+                setFileError(null);
+                setSubmitError(null);
+                setActiveViewerTab("pdf");
+              }}
+            />
+          </WorkflowCard>
+        ) : null}
       </main>
     </div>
   );
+}
+
+function useObjectUrl(file: File | null): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!file) {
+      setUrl((current) => {
+        if (current) {
+          URL.revokeObjectURL(current);
+        }
+
+        return null;
+      });
+      return;
+    }
+
+    const nextUrl = URL.createObjectURL(file);
+    setUrl((current) => {
+      if (current) {
+        URL.revokeObjectURL(current);
+      }
+
+      return nextUrl;
+    });
+
+    return () => {
+      URL.revokeObjectURL(nextUrl);
+    };
+  }, [file]);
+
+  return url;
 }
 
 function buildSubmissionPayload(options: ComposeOptions): ComposeOptions {
@@ -262,17 +369,140 @@ function buildSubmissionPayload(options: ComposeOptions): ComposeOptions {
   };
 }
 
-function buildPreviewEntries(files: JobFile[]): PreviewEntry[] {
-  const entries: PreviewEntry[] = [];
-
-  for (const kind of PREVIEW_ORDER) {
-    const file = files.find((item) => item.preview?.kind === kind);
-    if (file) {
-      entries.push({ kind, file });
-    }
+function pickPreferredViewerTab(tabs: ViewerTabDefinition[]): ViewerTab {
+  const annotTab = tabs.find((tab) => tab.id === "annot");
+  if (annotTab?.enabled) {
+    return "annot";
   }
 
-  return entries;
+  return tabs.find((tab) => tab.enabled)?.id ?? "pdf";
+}
+
+function buildViewerTabs({
+  api,
+  job,
+  isSubmitting,
+  sourceFile,
+  sourceFileUrl,
+}: {
+  api: UiApi;
+  job: JobRecord | null;
+  isSubmitting: boolean;
+  sourceFile: File | null;
+  sourceFileUrl: string | null;
+}): ViewerTabDefinition[] {
+  const files = job?.files ?? [];
+  const isBusy = isSubmitting || job?.status === "queued" || job?.status === "running";
+  const markdownFile = findOutputFile(files, "markdown");
+  const jsonFile = findOutputFile(files, "json");
+  const htmlFile = findOutputFile(files, "html");
+  const textFile = findOutputFile(files, "text");
+
+  return VIEWER_TAB_ORDER.map((id) => {
+    switch (id) {
+      case "pdf":
+        return {
+          id,
+          label: VIEWER_TAB_LABELS[id],
+          enabled: Boolean(sourceFile && sourceFileUrl),
+          loading: false,
+          panelType: "pdf",
+          content: null,
+          copyText: null,
+          downloadHref: sourceFileUrl,
+          downloadName: sourceFile?.name ?? null,
+          dataUrl: null,
+        } satisfies ViewerTabDefinition;
+      case "annot":
+        return {
+          id,
+          label: VIEWER_TAB_LABELS[id],
+          enabled: Boolean(sourceFile && job && jsonFile),
+          loading: Boolean(sourceFile && isBusy && !jsonFile),
+          panelType: "annot",
+          content: null,
+          copyText: null,
+          downloadHref: null,
+          downloadName: null,
+          dataUrl: job && jsonFile ? api.downloadFileUrl(job.id, jsonFile.name) : null,
+        } satisfies ViewerTabDefinition;
+      case "preview":
+        return createTextTab(id, VIEWER_TAB_LABELS[id], api, job, textFile, isBusy);
+      case "html":
+        return {
+          id,
+          label: VIEWER_TAB_LABELS[id],
+          enabled: Boolean(job && htmlFile && htmlFile.preview?.content),
+          loading: Boolean(isBusy && !htmlFile),
+          panelType: "html",
+          content: htmlFile?.preview?.content ?? null,
+          copyText: null,
+          downloadHref: job && htmlFile ? api.downloadFileUrl(job.id, htmlFile.name) : null,
+          downloadName: htmlFile?.name ?? null,
+          dataUrl: null,
+        } satisfies ViewerTabDefinition;
+      case "markdown":
+        return createTextTab(id, VIEWER_TAB_LABELS[id], api, job, markdownFile, isBusy);
+      case "json":
+        return {
+          id,
+          label: VIEWER_TAB_LABELS[id],
+          enabled: Boolean(job && jsonFile && jsonFile.preview?.content),
+          loading: Boolean(isBusy && !jsonFile),
+          panelType: "json",
+          content: jsonFile?.preview?.content ?? null,
+          copyText: jsonFile?.preview?.content ?? null,
+          downloadHref: job && jsonFile ? api.downloadFileUrl(job.id, jsonFile.name) : null,
+          downloadName: jsonFile?.name ?? null,
+          dataUrl: null,
+        } satisfies ViewerTabDefinition;
+    }
+  });
+}
+
+function createTextTab(
+  id: ViewerTab,
+  label: string,
+  api: UiApi,
+  job: JobRecord | null,
+  file: JobFile | null,
+  isBusy: boolean,
+): ViewerTabDefinition {
+  return {
+    id,
+    label,
+    enabled: Boolean(job && file && file.preview?.content),
+    loading: Boolean(isBusy && !file),
+    panelType: "text",
+    content: file?.preview?.content ?? null,
+    copyText: file?.preview?.content ?? null,
+    downloadHref: job && file ? api.downloadFileUrl(job.id, file.name) : null,
+    downloadName: file?.name ?? null,
+    dataUrl: null,
+  };
+}
+
+function findOutputFile(files: JobFile[], kind: JobFile["kind"]): JobFile | null {
+  return files.find((file) => file.kind === kind || file.preview?.kind === kind) ?? null;
+}
+
+function WorkflowCard({
+  number,
+  title,
+  summary,
+  children,
+}: {
+  number: string;
+  title: string;
+  summary: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="workflow-card-shell">
+      <StepHeading number={number} title={title} summary={summary} />
+      {children}
+    </section>
+  );
 }
 
 function StepHeading({
@@ -342,7 +572,7 @@ function UploadCard({
 
       <div className="file-summary">
         <strong>{file ? file.name : "No file selected"}</strong>
-        <span>{file ? formatFileSize(file.size) : "A PDF is required before you can submit."}</span>
+        <span>{file ? formatFileSize(file.size) : "A PDF is required before you can continue."}</span>
       </div>
 
       {error ? <p className="inline-error">{error}</p> : null}
@@ -353,6 +583,7 @@ function UploadCard({
 function OptionsCard({
   options,
   pageRangeError,
+  submitError,
   onToggleFormat,
   onChangeOption,
   onOpenAdvanced,
@@ -364,6 +595,7 @@ function OptionsCard({
 }: {
   options: ComposeOptions;
   pageRangeError: string | null;
+  submitError: string | null;
   onToggleFormat: (format: OutputFormat) => void;
   onChangeOption: Dispatch<SetStateAction<ComposeOptions>>;
   onOpenAdvanced: () => void;
@@ -499,6 +731,7 @@ function OptionsCard({
         </div>
 
         {pageRangeError ? <p className="inline-error">{pageRangeError}</p> : null}
+        {submitError ? <p className="inline-error">{submitError}</p> : null}
 
         <div className="button-row">
           <button
@@ -768,41 +1001,38 @@ function ToggleField({
 }
 
 function ResultsCard({
-  api,
   job,
-  activePreview,
-  setActivePreview,
-  previewFiles,
+  isSubmitting,
+  sourceFile,
+  boundingBoxJsonUrl,
+  activeViewerTab,
+  setActiveViewerTab,
+  tabs,
   submitError,
   onReset,
 }: {
-  api: UiApi;
   job: JobRecord | null;
-  activePreview: PreviewKind | null;
-  setActivePreview: (kind: PreviewKind | null) => void;
-  previewFiles: PreviewEntry[];
+  isSubmitting: boolean;
+  sourceFile: File | null;
+  boundingBoxJsonUrl: string | null;
+  activeViewerTab: ViewerTab;
+  setActiveViewerTab: (tab: ViewerTab) => void;
+  tabs: ViewerTabDefinition[];
   submitError: string | null;
   onReset: () => void;
 }) {
-  if (!job) {
-    return (
-      <div className="results-empty">
-        <p>No job is running yet.</p>
-        <span>Submit a PDF and this panel will show status, previews, and downloads.</span>
-        {submitError ? <p className="inline-error">{submitError}</p> : null}
-      </div>
-    );
-  }
-
-  const currentPreview = previewFiles.find((entry) => entry.kind === activePreview) ?? previewFiles[0];
+  const sourceName = job?.sourceName ?? sourceFile?.name ?? "Pending PDF";
+  const status = job ? statusLabel(job.status) : isSubmitting ? "Starting" : "Idle";
+  const message = job?.message ?? (isSubmitting ? "Preparing the job and opening the viewer." : "Select a file to begin.");
+  const progress = job?.progress ?? (isSubmitting ? 5 : 0);
 
   return (
     <div className="results-card">
       <div className="status-card">
         <div>
-          <p className="status-label">{statusLabel(job.status)}</p>
-          <h3>{job.sourceName}</h3>
-          <p>{job.message}</p>
+          <p className="status-label">{status}</p>
+          <h3>{sourceName}</h3>
+          <p>{message}</p>
         </div>
         <button type="button" className="secondary-button" onClick={onReset}>
           Start over
@@ -812,131 +1042,24 @@ function ResultsCard({
       <div className="progress-block">
         <div className="progress-meta">
           <span>Progress</span>
-          <strong>{Math.round(job.progress)}%</strong>
+          <strong>{Math.round(progress)}%</strong>
         </div>
         <div className="progress-track" aria-label="Conversion progress">
-          <div className="progress-fill" style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }} />
+          <div className="progress-fill" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
         </div>
       </div>
 
       {submitError ? <p className="inline-error">{submitError}</p> : null}
 
-      <section className="preview-section">
-        <div className="section-title">
-          <h4>Preview</h4>
-          <span>Markdown, JSON, HTML, and text outputs appear here when available.</span>
-        </div>
-
-        {previewFiles.length > 0 ? (
-          <>
-            <div className="preview-tabs" role="tablist" aria-label="Preview tabs">
-              {previewFiles.map((entry) => (
-                <button
-                  key={entry.kind}
-                  type="button"
-                  role="tab"
-                  aria-selected={entry.kind === currentPreview?.kind}
-                  className={`preview-tab ${entry.kind === currentPreview?.kind ? "selected" : ""}`}
-                  onClick={() => setActivePreview(entry.kind)}
-                >
-                  {PREVIEW_LABELS[entry.kind]}
-                </button>
-              ))}
-            </div>
-
-            {currentPreview ? (
-              <PreviewPane file={currentPreview.file} api={api} jobId={job.id} />
-            ) : null}
-          </>
-        ) : (
-          <div className="preview-empty">
-            <p>No previewable outputs were returned yet.</p>
-          </div>
-        )}
-      </section>
-
-      <section className="download-section">
-        <div className="section-title">
-          <h4>Downloads</h4>
-          <span>Every output gets its own link, plus one bundle for all of them.</span>
-        </div>
-
-        <div className="download-grid">
-          {job.files.map((file) => (
-            <a key={file.name} className="download-card" href={api.downloadFileUrl(job.id, file.name)}>
-              <strong>{file.name}</strong>
-              <span>{downloadLabel(file)}</span>
-            </a>
-          ))}
-        </div>
-
-        <a className="bundle-link" href={api.downloadBundleUrl(job.id)}>
-          Download all outputs
-        </a>
-      </section>
-    </div>
-  );
-}
-
-function PreviewPane({ file, api, jobId }: { file: JobFile; api: UiApi; jobId: string }) {
-  const preview = file.preview;
-
-  if (!preview) {
-    return (
-      <div className="preview-empty">
-        <p>This file only has a download link.</p>
-      </div>
-    );
-  }
-
-  if (preview.kind === "html") {
-    return (
-      <iframe
-        title={file.name}
-        className="preview-frame"
-        srcDoc={preview.content}
-        sandbox=""
+      <BoundingBoxPreview
+        sourceFile={sourceFile}
+        jsonUrl={boundingBoxJsonUrl}
+        tabs={tabs}
+        activeTab={activeViewerTab}
+        onTabChange={setActiveViewerTab}
       />
-    );
-  }
-
-  return (
-    <div className="preview-window">
-      <div className="preview-toolbar">
-        <span>{file.name}</span>
-        <a href={api.downloadFileUrl(jobId, file.name)}>Download</a>
-      </div>
-      <pre>{formatPreview(preview.kind, preview.content)}</pre>
     </div>
   );
-}
-
-function downloadLabel(file: JobFile): string {
-  if (file.preview) {
-    return `${PREVIEW_LABELS[file.preview.kind]} preview`;
-  }
-
-  if (file.kind === "pdf") {
-    return "PDF output";
-  }
-
-  if (file.kind === "image") {
-    return "Image output";
-  }
-
-  return "Download only";
-}
-
-function formatPreview(kind: PreviewKind, content: string): string {
-  if (kind !== "json") {
-    return content;
-  }
-
-  try {
-    return JSON.stringify(JSON.parse(content), null, 2);
-  } catch {
-    return content;
-  }
 }
 
 function statusLabel(status: JobRecord["status"]): string {

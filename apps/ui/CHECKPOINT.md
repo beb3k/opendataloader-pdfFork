@@ -10,50 +10,226 @@ It is written as a handoff for another agent or developer who may need to:
 - troubleshoot backend conversion failures
 - improve the workflow or polish the interface
 
-Last updated: 2026-03-19
+Last updated: 2026-03-20
+
+## Current Handoff
+
+This is the latest and most relevant checkpoint for the UI work. Older sections below describe earlier viewer experiments and should be treated as history, not the current target.
+
+### Current Goal
+
+The UI is being changed into a sequential full-width workflow:
+
+- only the upload card is visible on first load
+- the options card appears after a PDF is selected
+- the results card appears after the user clicks `Create Job`
+- all cards use the full page width
+- the results card is the viewer
+- the viewer has a fixed-width thumbnail rail on the left
+- the viewer has a tabbed content panel on the right
+- the tab order is fixed as `PDF`, `Annot`, `Preview`, `HTML`, `MD`, `JSON`
+
+### What Has Already Been Changed
+
+The current frontend rewrite is already in progress and the main files have been reshaped around the new flow.
+
+Files with active work:
+
+- `apps/ui/frontend/src/App.tsx`
+- `apps/ui/frontend/src/components/BoundingBoxPreview.tsx`
+- `apps/ui/frontend/src/styles.css`
+- `apps/ui/frontend/src/App.test.tsx`
+- `apps/ui/frontend/src/components/BoundingBoxPreview.test.tsx`
+
+What the current code is trying to do:
+
+- `App.tsx` now uses a single-column full-width workflow instead of the old page layout
+- the page reveals cards in sequence based on user progress
+- the results area now drives a fixed viewer-tab model instead of separate preview widgets
+- `BoundingBoxPreview.tsx` now owns the left thumbnail rail and the right tabbed panel
+- the right panel includes the download control in the tab row
+- text-style tabs are wired for copy behavior inside the panel
+- `styles.css` was rebuilt to support the full-width stacked cards and the new viewer shell
+- the frontend tests were rewritten to match the new staged workflow and the new viewer contract
+
+### Important Current State
+
+This work is not yet fully closed out.
+
+What is already true:
+
+- the old detached or floating viewer direction is no longer the active target
+- the new sequential full-width card flow has been coded
+- the new viewer structure has been coded
+- `npm test` now passes after the latest viewer fixes
+- `npm run build` now passes after the latest viewer fixes
+
+What is still pending:
+
+- the live browser layout still needs another visual check after tests are green
+- final manual browser QA is still open for the sequential flow and overlay alignment on a real document
+
+### Known Resume Point
+
+The exact next steps for the next session are:
+
+1. Open the local UI and confirm the page behaves like the intended full-width sequential workflow.
+2. Upload a real sample PDF and visually confirm the bounding boxes line up in the viewer.
+3. Sanity-check the page rail toggle, tab switching, and downloads in the live UI.
+
+### Most Likely Problem Area If Tests Still Fail
+
+The most recent bug was not about the tab model. It was about the document canvas never appearing because the render effect needed a canvas element to exist before it could render, but the canvas element was only mounted after a rendered page existed.
+
+That circular dependency was broken by changing the component so the canvas is mounted immediately inside the document stage. If anything is still broken, start there.
+
+### Practical Notes For The Next Agent
+
+- do not revert unrelated repo changes; this checkout is dirty
+- use `apply_patch` for edits
+- keep the viewer as a single integrated results card
+- do not bring back the old floating viewer design
+- do not move parser logic into the React layout; keep the frontend focused on display
+- after UI changes, verify both tests and the live page before reporting back
+
+### Verification Status At Handoff
+
+Verified recently:
+
+- the new sequential full-width workflow code is in place
+- the frontend test suite passes after the latest viewer fixes
+- the frontend build passes after the latest viewer fixes
+
+Not yet re-verified after the latest canvas fix:
+
+- final live browser behavior
+
+### Latest Session Update
+
+This session closed out the pending frontend verification and cleaned up the viewer behavior.
+
+What changed:
+
+- fixed the viewer so its page layout state is established as soon as a page viewport is known instead of waiting until the full render promise finishes
+- added the missing `.bbox-stage-shell` styling for loading and ready states
+- fixed the page rail toggle so it actually hides the thumbnail rail instead of only flipping button state
+- corrected the viewer test harness so it keeps the uploaded PDF stable across tab clicks
+- added coverage for collapsing the page rail
+
+What was verified:
+
+- frontend tests pass in `apps/ui/frontend`
+- frontend build passes in `apps/ui/frontend`
+
+Most recent frontend test result:
+
+- `20 passed`
 
 ## Latest Session Update
 
-This checkpoint now includes the latest UI polish work and the preparation for bounding box visualization.
+This checkpoint now includes the detached floating bounding box viewer, the symbol-based control refresh, and the repo-local fix for the code review graph MCP startup issue.
+
+### What Changed In The Latest Session
+
+The main UI changes were:
+
+- moved the bounding box viewer out of the results card so it now lives beside the card in the results column
+- changed the viewer so opening it creates a floating panel over the results area instead of an inline block inside the card
+- kept the page rail, zoom, rotation, and page navigation behavior working while making the component easier to read and follow
+- changed the requested theme and viewer controls to symbols only
+- kept plain text names on those controls through accessibility labels and tooltips
+- tightened the theme toggle so it only wraps its own buttons and no longer stretches visually toward the edge
+- added mobile fallback styling so the floating viewer becomes a contained full-width panel when space is tight
+
+The code review graph setup was also fixed for this repo:
+
+- replaced the repo-local `uvx` MCP launcher with a small wrapper script
+- made the wrapper always start the installed graph tool from the repo root
+- avoided the earlier failures caused by sandbox-sensitive `uvx` startup and the wrong working directory
+
+Files added or changed for this session:
+
+- `apps/ui/frontend/src/App.tsx`
+- `apps/ui/frontend/src/components/BoundingBoxPreview.tsx`
+- `apps/ui/frontend/src/styles.css`
+- `apps/ui/frontend/src/App.test.tsx`
+- `apps/ui/frontend/src/components/BoundingBoxPreview.test.tsx`
+- `.mcp.json`
+- `scripts/code-review-graph-mcp.cmd`
+
+### What Was Verified In The Latest Session
+
+Verified successfully:
+
+- frontend tests pass after the detached viewer and symbol-control changes
+- frontend production build passes after the UI refactor
+- the new repo-local graph launcher can read graph status from the repo root
+- the same graph launcher also works when started from `C:\Windows\System32`, which confirms the working-directory problem is fixed
+
+Most recent frontend test result:
+
+- `13 passed`
 
 ### What Changed In This Session
 
 The main UI changes were:
 
-- moved advanced options into a normal inline panel below the options card
-- made the advanced panel close when the user clicks outside it
-- added smooth open and close animation for the advanced panel
-- made the advanced options button visibly react on hover
-- stopped the results panel from stretching taller when advanced options open
-- removed the extra hero card from the header to reduce visual clutter
-- fixed long download filenames so they wrap inside the download card instead of spilling out
+- added a new read-only bounding box viewer inside the results panel
+- made the viewer appear when both PDF and JSON outputs are available for the same job
+- rendered the PDF page in the browser and drew overlay rectangles on top of it
+- added previous and next page controls for multi-page documents
+- added simple on and off filters for text boxes and table boxes
+- kept the existing text previews and download links unchanged
+- added a small helper layer that flattens the JSON tree into drawable boxes grouped by page
+- added frontend tests for the new viewer wiring and the bounding box parsing math
 
-These changes were kept intentionally simple in the code:
+One small package change was needed:
 
-- explicit open and close functions
-- explicit mounted versus open animation state
-- early returns for the close behavior
-- straightforward CSS classes for hover and transition behavior
+- added `pdfjs-dist` to the frontend so the browser UI can draw PDF pages locally
+
+Implementation notes that matter for the next session:
+
+- the viewer uses the JSON output as the source of truth for boxes
+- the frontend only converts coordinates for display
+- the first version only shows text and table boxes
+- picture boxes and descriptions were intentionally left for a later pass
+- there is now a second in-progress component file under `apps/ui/frontend/src/components/` named `BoundingBoxInspector.tsx`
+- the app is using `BoundingBoxPreview.tsx` for the active implementation path
 
 ### What Was Verified In This Session
 
 Verified successfully:
 
-- frontend tests pass after the UI polish changes
-- live browser checks confirm the advanced panel opens below the options card
-- live browser checks confirm outside click closes the advanced panel
-- live browser checks confirm the results panel no longer stretches when advanced options open
-- live browser checks confirm the advanced button hover state is visible
-- live browser checks confirm long download filenames stay inside the card
-- live browser checks confirm the hero card is gone
+- frontend tests pass after the bounding box work
+- frontend production build passes after the bounding box work
+- the new viewer is only shown when both PDF and JSON outputs are present
+- the JSON tree flattening and coordinate conversion logic are covered by focused unit tests
 
 ### Frontend Test Status
 
 Most recent frontend test result:
 
-- `6 passed`
+- `9 passed`
 
-This supersedes the earlier `4 passed` result recorded below.
+This supersedes the earlier `6 passed` and `4 passed` results recorded below.
+
+### Harness Follow-Up For Bounding Box Work
+
+Separate repo-harness work was completed after this UI checkpoint and has since been merged to `main`.
+
+Important practical consequence:
+
+- the repo should now treat the harness docs and boundary checks as the source of truth for follow-up work
+- this local checkout is now synced with the merged harness work
+- if a future session does not see `AGENTS.md`, `docs/architecture/LAYERS.md`, and `docs/guides/AGENT_REVIEW.md`, sync `main` first instead of guessing
+
+The most important harness rules for the bounding box feature are:
+
+- keep parser behavior and bounding box meaning in the parser outputs, not in the React UI
+- keep the UI backend talking to the installed `opendataloader-pdf` package boundary, not to repo source-tree shortcuts
+- if the UI needs new JSON fields or new CLI options, change Java first, then run `npm run sync` so Python and Node stay aligned
+- treat `content/docs/` as public release documentation, not as scratch notes for the local UI prototype
+- run `npm run check:harness` after boundary-affecting changes
 
 ### Bounding Box Integration Preparation
 
@@ -77,6 +253,12 @@ Recommended implementation path:
 7. start with text and table boxes first
 8. add picture boxes and descriptions later if needed
 
+Additional implementation guardrails from the harness work:
+
+- the frontend should only transform coordinates for display, not invent a new document-structure model
+- if a box is missing or ambiguous in JSON, fix the source output shape instead of hardcoding UI-only guesses
+- keep the first version read-only and diagnostic; do not tie editing behavior to the overlay until the display layer is stable
+
 Important data notes from the docs:
 
 - bounding boxes are documented as coordinates such as `[left, bottom, right, top]`
@@ -95,9 +277,11 @@ Official references:
 
 If the next session continues this work, the cleanest next feature is:
 
-- add a PDF page viewer with a simple overlay layer fed by the JSON bounding boxes
+- manually click through the bounding box viewer in the real browser UI and confirm the overlays line up visually on real documents
 
-That can be built without changing the conversion backend contract, because the needed data should already be in the JSON output.
+After that, the next most sensible expansion is:
+
+- add picture boxes and any useful hover details once the current text and table overlay is confirmed visually
 
 ## Goal Of This Work
 
@@ -161,6 +345,7 @@ Implemented UI flow:
 - advanced drawer for secondary controls
 - hybrid settings section
 - result panel with status, progress, preview tabs, and downloads
+- read-only PDF bounding box viewer backed by the job's PDF and JSON outputs
 - session persistence for advanced drawer open/closed state
 
 ### Launcher
@@ -189,6 +374,8 @@ Frontend:
 - `apps/ui/frontend/src/App.tsx`
 - `apps/ui/frontend/src/lib/api.ts`
 - `apps/ui/frontend/src/lib/types.ts`
+- `apps/ui/frontend/src/components/BoundingBoxPreview.tsx`
+- `apps/ui/frontend/src/lib/boundingBoxes.ts`
 - `apps/ui/frontend/src/App.test.tsx`
 - `apps/ui/frontend/package.json`
 
@@ -260,7 +447,7 @@ Command that passed:
 
 Result:
 
-- `4 passed`
+- `9 passed`
 
 ### Frontend Build
 
@@ -391,6 +578,7 @@ As of this checkpoint:
 - frontend production build passes
 - a real PDF conversion through the backend API works
 - the launcher starts both services after the Windows npm fix
+- the results panel now includes a first working bounding box viewer for PDF plus JSON output pairs
 
 ## What Has Not Been Fully Verified Yet
 
@@ -399,6 +587,8 @@ The following are still not fully exercised in a manual, human-clicked browser s
 - uploading through the visible browser UI rather than through backend API test calls
 - clicking through every advanced setting combination
 - hybrid settings against a real hybrid backend
+- bounding box alignment on real multi-page documents in a live browser session
+- page navigation and text versus table toggles in a live browser session
 - visual polish and layout behavior across more viewport sizes
 - manual download/opening of every output type through the browser
 
@@ -435,9 +625,12 @@ If another agent or person wants to continue manually:
 4. Leave defaults on for the first run.
 5. Confirm the job reaches a finished state.
 6. Confirm previews appear.
-7. Confirm downloads work.
-8. Try a second run with different formats.
-9. Try opening and closing the advanced drawer and confirm its state persists.
+7. Confirm the bounding box viewer appears when both PDF and JSON are present.
+8. Step through pages if the document has more than one page.
+9. Toggle text boxes and table boxes on and off and confirm the overlay updates.
+10. Confirm downloads work.
+11. Try a second run with different formats.
+12. Try opening and closing the advanced drawer and confirm its state persists.
 
 ## Suggested Troubleshooting Checklist
 
@@ -472,6 +665,8 @@ If frontend tests or build fail only inside an agent sandbox:
 Good next areas for work:
 
 - add proper browser-level end-to-end tests
+- manually verify and polish the new bounding box viewer
+- add picture boxes and richer overlay details if the current alignment looks good
 - improve visual polish and layout behavior
 - make conversion progress feel more informative
 - support richer previews
@@ -506,7 +701,9 @@ If the next agent is troubleshooting behavior:
 - `apps/ui/backend/app/models.py`
 - `apps/ui/scripts/run_dev.py`
 - `apps/ui/frontend/src/App.tsx`
+- `apps/ui/frontend/src/components/BoundingBoxPreview.tsx`
 - `apps/ui/frontend/src/lib/api.ts`
+- `apps/ui/frontend/src/lib/boundingBoxes.ts`
 - `apps/ui/frontend/src/lib/types.ts`
 
 ## Minimal Carry-Forward Summary
@@ -515,7 +712,8 @@ If someone only reads one short section, read this:
 
 - A local UI was built under `apps/ui/` with FastAPI backend, React frontend, and a Python launcher.
 - Backend tests pass, frontend tests pass, and frontend build passes.
+- The results panel now has a first working bounding box viewer that overlays text and table boxes on top of PDF pages when both PDF and JSON outputs are available.
 - Real backend conversion of `samples/pdf/lorem.pdf` succeeded and produced markdown and json outputs.
 - A Windows launcher bug was found in this session and fixed: the launcher now resolves `npm.cmd` instead of assuming `npm` works directly.
 - The launcher now starts both backend and frontend successfully.
-- The biggest remaining gap is full manual browser QA and any UI refinement or additional functionality work.
+- The biggest remaining gap is manual browser QA for overlay alignment and follow-up polish such as picture boxes or richer inspection details.
