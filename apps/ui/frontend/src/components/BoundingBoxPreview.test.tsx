@@ -6,6 +6,12 @@ import BoundingBoxPreview, { type ViewerTab, type ViewerTabDefinition } from "./
 const getDocumentMock = vi.fn();
 const globalWorkerOptions = { workerSrc: "" };
 const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+const originalDomMatrix = globalThis.DOMMatrix;
+const SAME_CANVAS_ERROR =
+  "Cannot use the same canvas during multiple render() operations. Use different canvas or ensure previous operations were cancelled or completed";
+
+let renderMode: "resolved" | "guarded" | "pending" = "resolved";
+let pendingRenderTasks: MockRenderTask[] = [];
 
 vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({
   default: "pdf-worker.js",
@@ -29,8 +35,12 @@ describe("BoundingBoxPreview", () => {
       promise: Promise.resolve(mockDocument),
     });
 
+    renderMode = "resolved";
+    pendingRenderTasks = [];
+    activeCanvasTasks.clear();
     mockDocument.getPage.mockClear();
     mockDocument.destroy.mockClear();
+    mockDocument.numPages = 3;
 
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
       () => ({}) as CanvasRenderingContext2D,
@@ -54,6 +64,35 @@ describe("BoundingBoxPreview", () => {
         writeText: vi.fn(async () => undefined),
       },
     });
+    globalThis.DOMMatrix = class {
+      static fromMatrix() {
+        return new this();
+      }
+
+      multiplySelf() {
+        return this;
+      }
+
+      preMultiplySelf() {
+        return this;
+      }
+
+      translateSelf() {
+        return this;
+      }
+
+      scaleSelf() {
+        return this;
+      }
+
+      rotateSelf() {
+        return this;
+      }
+
+      invertSelf() {
+        return this;
+      }
+    } as unknown as typeof DOMMatrix;
   });
 
   afterEach(() => {
@@ -62,6 +101,8 @@ describe("BoundingBoxPreview", () => {
     if (originalClientWidth) {
       Object.defineProperty(HTMLElement.prototype, "clientWidth", originalClientWidth);
     }
+
+    globalThis.DOMMatrix = originalDomMatrix;
   });
 
   it("renders page thumbnails with page numbers and lets the user jump pages", async () => {
@@ -71,8 +112,32 @@ describe("BoundingBoxPreview", () => {
     expect(screen.getByText("Page 1")).toBeInTheDocument();
     expect(screen.getByText("Page 2")).toBeInTheDocument();
 
+    await waitFor(() => {
+      const frame = document.querySelector(".bbox-page-thumb-frame");
+      expect(frame).toHaveStyle({ width: "132px", height: "198px" });
+    });
+
     fireEvent.click(screen.getByRole("button", { name: /go to page 2/i }));
     expect(await screen.findByText(/page 2 of 3/i)).toBeInTheDocument();
+  });
+
+  it("keeps the thumbnail frame size stable on text tabs", async () => {
+    render(<Harness />);
+
+    const thumbButton = await screen.findByRole("button", { name: /go to page 1/i });
+
+    await waitFor(() => {
+      const frame = document.querySelector(".bbox-page-thumb-frame");
+      expect(frame).toHaveStyle({ width: "132px", height: "198px" });
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: /^preview$/i }));
+    expect(thumbButton).toBeInTheDocument();
+
+    await waitFor(() => {
+      const frame = document.querySelector(".bbox-page-thumb-frame");
+      expect(frame).toHaveStyle({ width: "132px", height: "198px" });
+    });
   });
 
   it("updates zoom and rotation controls for document tabs", async () => {
@@ -101,7 +166,7 @@ describe("BoundingBoxPreview", () => {
     });
   });
 
-  it("switches between pdf and annot tabs without duplicating the render path", async () => {
+  it("restores the pdf canvas after leaving annot and returning", async () => {
     render(<Harness />);
 
     await screen.findByText(/page 1 of 3/i);
@@ -110,13 +175,14 @@ describe("BoundingBoxPreview", () => {
       expect(document.querySelectorAll(".bbox-rect")).toHaveLength(1);
     });
 
-    fireEvent.click(screen.getByRole("tab", { name: /^pdf$/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /^preview$/i }));
     await waitFor(() => {
-      expect(document.querySelectorAll(".bbox-rect")).toHaveLength(0);
+      expect(screen.getByText(/plain text preview/i)).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole("tab", { name: /^annot$/i }));
     await waitFor(() => {
+      expect(document.querySelector(".bbox-pdf-canvas")).not.toBeNull();
       expect(document.querySelectorAll(".bbox-rect")).toHaveLength(1);
     });
   });
@@ -144,6 +210,43 @@ describe("BoundingBoxPreview", () => {
     expect(screen.queryByRole("button", { name: /copy current content/i })).not.toBeInTheDocument();
   });
 
+  it("copies only the active page when a page preview endpoint is available", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/preview?page=2")) {
+        return {
+          ok: true,
+          json: async () => ({
+            kind: "text",
+            content: "Page 2 copy",
+          }),
+        } as Response;
+      }
+
+      return createJsonResponse() as Response;
+    }) as unknown as typeof fetch;
+
+    render(
+      <Harness
+        tabs={createTabs({
+          preview: {
+            pagePreviewHref: "/jobs/job-1/files/sample.txt/preview",
+          },
+        })}
+      />,
+    );
+
+    await screen.findByText(/page 1 of 3/i);
+    fireEvent.click(screen.getByRole("button", { name: /go to page 2/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /^preview$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /copy current content/i }));
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith("Page 2 copy");
+    });
+  });
+
   it("keeps unavailable tabs visible but disabled", () => {
     render(
       <Harness
@@ -168,6 +271,42 @@ describe("BoundingBoxPreview", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: /^annot$/i }));
     expect(await screen.findByText(/could not load the bounding boxes/i)).toBeInTheDocument();
+  });
+
+  it("re-enters the document view without a same-canvas error while the first render is still active", async () => {
+    mockDocument.numPages = 1;
+    renderMode = "guarded";
+
+    render(<Harness />);
+
+    expect(await screen.findByRole("button", { name: /go to page 1/i })).toBeInTheDocument();
+
+    await waitFor(() => {
+      const frame = document.querySelector(".bbox-page-thumb-frame");
+      expect(frame).toHaveStyle({ width: "132px", height: "198px" });
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: /^preview$/i }));
+    expect(await screen.findByText(/plain text preview/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /^annot$/i }));
+    expect(await screen.findByText(/page 1 of 1/i)).toBeInTheDocument();
+    expect(screen.queryByText(SAME_CANVAS_ERROR)).not.toBeInTheDocument();
+  });
+
+  it("cancels active page and thumbnail renders when the viewer unmounts", async () => {
+    mockDocument.numPages = 2;
+    renderMode = "pending";
+
+    const view = render(<Harness />);
+
+    await waitFor(() => {
+      expect(pendingRenderTasks).toHaveLength(3);
+    });
+
+    view.unmount();
+
+    expect(pendingRenderTasks.every((task) => task.cancel.mock.calls.length === 1)).toBe(true);
   });
 });
 
@@ -319,10 +458,87 @@ function createMockPage(pageNumber: number) {
         height: baseHeight * scale,
       };
     },
-    render() {
-      return {
-        promise: Promise.resolve(),
-      };
+    render({ canvas }: { canvas: HTMLCanvasElement }) {
+      return createRenderTask(canvas);
     },
   };
+}
+
+interface MockRenderTask {
+  promise: Promise<void>;
+  cancel: ReturnType<typeof vi.fn>;
+}
+
+function createRenderTask(canvas: HTMLCanvasElement): MockRenderTask {
+  if (renderMode === "guarded") {
+    return createGuardedRenderTask(canvas);
+  }
+
+  if (renderMode === "pending") {
+    const task = createPendingRenderTask();
+    pendingRenderTasks.push(task);
+    return task;
+  }
+
+  return createResolvedRenderTask();
+}
+
+function createResolvedRenderTask(): MockRenderTask {
+  return {
+    promise: Promise.resolve(),
+    cancel: vi.fn(),
+  };
+}
+
+function createPendingRenderTask(): MockRenderTask {
+  let rejectPromise: ((reason?: unknown) => void) | null = null;
+  const promise = new Promise<void>((_resolve, reject) => {
+    rejectPromise = reject;
+  });
+
+  return {
+    promise,
+    cancel: vi.fn(() => {
+      rejectPromise?.(createCancelledError());
+    }),
+  };
+}
+
+const activeCanvasTasks = new Map<HTMLCanvasElement, MockRenderTask>();
+
+function createGuardedRenderTask(canvas: HTMLCanvasElement): MockRenderTask {
+  if (activeCanvasTasks.has(canvas)) {
+    return {
+      promise: Promise.reject(new Error(SAME_CANVAS_ERROR)),
+      cancel: vi.fn(),
+    };
+  }
+
+  let rejectPromise: ((reason?: unknown) => void) | null = null;
+
+  const promise = new Promise<void>((_resolve, reject) => {
+    rejectPromise = reject;
+  });
+
+  const task: MockRenderTask = {
+    promise,
+    cancel: vi.fn(() => {
+      if (activeCanvasTasks.get(canvas) !== task) {
+        return;
+      }
+
+      activeCanvasTasks.delete(canvas);
+      rejectPromise?.(createCancelledError());
+    }),
+  };
+
+  activeCanvasTasks.set(canvas, task);
+
+  return task;
+}
+
+function createCancelledError(): Error {
+  const error = new Error("render cancelled");
+  error.name = "RenderingCancelledException";
+  return error;
 }

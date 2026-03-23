@@ -35,6 +35,12 @@ export interface ComposeOptions {
 export interface PreviewPayload {
   kind: PreviewKind;
   content: string;
+  pages?: PreviewPagePayload[];
+}
+
+export interface PreviewPagePayload {
+  pageNumber: number;
+  content: string;
 }
 
 export interface JobFile {

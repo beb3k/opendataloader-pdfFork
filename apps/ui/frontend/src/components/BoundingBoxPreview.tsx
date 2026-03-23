@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import {
@@ -6,6 +6,7 @@ import {
   projectBoundingBox,
   type OverlayCategory,
 } from "../lib/boundingBoxes";
+import type { PreviewPagePayload } from "../lib/types";
 
 const CATEGORY_LABELS: Record<OverlayCategory, string> = {
   text: "Text",
@@ -27,6 +28,8 @@ export interface ViewerTabDefinition {
   panelType: "pdf" | "annot" | "text" | "html" | "json";
   content: string | null;
   copyText: string | null;
+  pageCopies?: PreviewPagePayload[];
+  pagePreviewHref?: string | null;
   downloadHref: string | null;
   downloadName: string | null;
   dataUrl: string | null;
@@ -63,6 +66,11 @@ interface ThumbnailButtonProps {
   rotation: number;
 }
 
+interface CanvasRenderTask {
+  promise: Promise<unknown>;
+  cancel: () => void;
+}
+
 export default function BoundingBoxPreview({
   sourceFile,
   jsonUrl,
@@ -93,7 +101,11 @@ export default function BoundingBoxPreview({
   });
   const [overlayDocument, setOverlayDocument] = useState(() => parseOverlayDocument('{"kids":[]}'));
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!isDocumentTab) {
+      return;
+    }
+
     const element = viewerRef.current;
     if (!element) {
       return;
@@ -120,7 +132,7 @@ export default function BoundingBoxPreview({
     return () => {
       observer.disconnect();
     };
-  }, []);
+  }, [isDocumentTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -237,17 +249,22 @@ export default function BoundingBoxPreview({
   }, [jsonUrl]);
 
   useEffect(() => {
-    if (!pdfDocument || !canvasRef.current || !viewerWidth) {
+    if (!isDocumentTab || !pdfDocument || !canvasRef.current || !viewerWidth) {
       return;
     }
 
     const activeCanvas = canvasRef.current;
     const activeDocument = pdfDocument;
     let cancelled = false;
+    let renderTask: CanvasRenderTask | null = null;
 
     async function renderPage() {
       try {
         const page = await activeDocument.getPage(currentPage);
+        if (cancelled) {
+          return;
+        }
+
         const baseViewport = page.getViewport({ scale: 1 });
         const fitWidth = usesVerticalLayout(rotation) ? baseViewport.height : baseViewport.width;
         const scale = (viewerWidth / fitWidth) * zoomLevel;
@@ -273,7 +290,7 @@ export default function BoundingBoxPreview({
           scale,
         });
 
-        const renderTask = page.render({
+        renderTask = page.render({
           canvas: activeCanvas,
           canvasContext: context,
           transform: pixelRatio === 1 ? undefined : [pixelRatio, 0, 0, pixelRatio, 0, 0],
@@ -284,9 +301,10 @@ export default function BoundingBoxPreview({
         if (cancelled) {
           return;
         }
+
         setPdfErrorMessage(null);
       } catch (error) {
-        if (cancelled) {
+        if (cancelled || isRenderCancelled(error)) {
           return;
         }
 
@@ -302,8 +320,10 @@ export default function BoundingBoxPreview({
 
     return () => {
       cancelled = true;
+      renderTask?.cancel();
+      clearCanvas(activeCanvas);
     };
-  }, [currentPage, pdfDocument, rotation, viewerWidth, zoomLevel]);
+  }, [currentPage, isDocumentTab, pdfDocument, rotation, viewerWidth, zoomLevel]);
 
   useEffect(() => {
     setCurrentPage((current) => Math.min(current, pageCount));
@@ -328,7 +348,13 @@ export default function BoundingBoxPreview({
   const canZoomOut = pdfState === "ready" && zoomLevel > MIN_ZOOM;
   const canZoomIn = pdfState === "ready" && zoomLevel < MAX_ZOOM;
   const canUseViewerControls = pdfState === "ready";
-  const canCopy = Boolean(activeDefinition?.copyText);
+  const isCopyablePanel = activeDefinition?.panelType === "text" || activeDefinition?.panelType === "json";
+  const canCopy = Boolean(
+    isCopyablePanel &&
+      (activeDefinition?.copyText ||
+        activeDefinition?.pageCopies?.length ||
+        activeDefinition?.pagePreviewHref),
+  );
   const showDownload = Boolean(activeDefinition?.downloadHref && activeDefinition?.downloadName);
   const showOverlay = activeDefinition?.panelType === "annot";
 
@@ -356,11 +382,17 @@ export default function BoundingBoxPreview({
   }
 
   async function copyCurrentPanel() {
-    if (!activeDefinition?.copyText || !navigator.clipboard?.writeText) {
+    if (!activeDefinition || !navigator.clipboard?.writeText) {
       return;
     }
 
-    await navigator.clipboard.writeText(formatPanelContent(activeDefinition));
+    const pageCopy = await resolvePageCopyText(activeDefinition, currentPage);
+    const nextCopyText = pageCopy ?? activeDefinition.copyText;
+    if (!nextCopyText) {
+      return;
+    }
+
+    await navigator.clipboard.writeText(formatPanelContent(activeDefinition, nextCopyText));
     setCopyFeedback("Copied");
     window.setTimeout(() => {
       setCopyFeedback(null);
@@ -703,21 +735,22 @@ function ThumbnailButton({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [thumbnailSize, setThumbnailSize] = useState<ThumbnailSize | null>(null);
 
-  useEffect(() => {
-    if (!canvasRef.current) {
+  useLayoutEffect(() => {
+    const thumbnailCanvas = canvasRef.current;
+    if (!thumbnailCanvas) {
       return;
     }
 
     let cancelled = false;
+    let renderTask: CanvasRenderTask | null = null;
 
-    async function renderThumbnail() {
+    async function renderThumbnail(activeCanvas: HTMLCanvasElement) {
       try {
-        const activeCanvas = canvasRef.current;
-        if (!activeCanvas) {
+        const page = await pdfDocument.getPage(pageNumber);
+        if (cancelled) {
           return;
         }
 
-        const page = await pdfDocument.getPage(pageNumber);
         const baseViewport = page.getViewport({ scale: 1 });
         const fitWidth = usesVerticalLayout(rotation) ? baseViewport.height : baseViewport.width;
         const scale = THUMBNAIL_WIDTH / fitWidth;
@@ -734,7 +767,15 @@ function ThumbnailButton({
         activeCanvas.style.width = `${viewport.width}px`;
         activeCanvas.style.height = `${viewport.height}px`;
 
-        const renderTask = page.render({
+        const displaySize = getDisplaySize(viewport.width, viewport.height, rotation);
+        setThumbnailSize({
+          baseWidth: viewport.width,
+          baseHeight: viewport.height,
+          displayWidth: displaySize.width,
+          displayHeight: displaySize.height,
+        });
+
+        renderTask = page.render({
           canvas: activeCanvas,
           canvasContext: context,
           transform: pixelRatio === 1 ? undefined : [pixelRatio, 0, 0, pixelRatio, 0, 0],
@@ -745,28 +786,23 @@ function ThumbnailButton({
         if (cancelled) {
           return;
         }
-
-        const displaySize = getDisplaySize(viewport.width, viewport.height, rotation);
-
-        setThumbnailSize({
-          baseWidth: viewport.width,
-          baseHeight: viewport.height,
-          displayWidth: displaySize.width,
-          displayHeight: displaySize.height,
-        });
-      } catch {
-        if (cancelled) {
+      } catch (error) {
+        if (cancelled || isRenderCancelled(error)) {
           return;
         }
 
         setThumbnailSize(null);
+        clearCanvas(thumbnailCanvas);
       }
     }
 
-    void renderThumbnail();
+    setThumbnailSize(null);
+    void renderThumbnail(thumbnailCanvas);
 
     return () => {
       cancelled = true;
+      renderTask?.cancel();
+      clearCanvas(thumbnailCanvas);
     };
   }, [pageNumber, pdfDocument, rotation]);
 
@@ -777,7 +813,7 @@ function ThumbnailButton({
       onClick={onSelect}
       aria-label={`Go to page ${pageNumber}`}
     >
-      <span
+      <div
         className="bbox-page-thumb-frame"
         style={
           thumbnailSize
@@ -788,7 +824,7 @@ function ThumbnailButton({
             : undefined
         }
       >
-        <span
+        <div
           className="bbox-page-thumb-transform"
           style={
             thumbnailSize
@@ -805,22 +841,63 @@ function ThumbnailButton({
           }
         >
           <canvas ref={canvasRef} className="bbox-page-thumb-canvas" />
-        </span>
-      </span>
+        </div>
+      </div>
       <span className="bbox-page-thumb-number">Page {pageNumber}</span>
     </button>
   );
 }
 
-function formatPanelContent(tab: ViewerTabDefinition): string {
-  if (tab.panelType !== "json") {
-    return tab.content ?? "";
+async function resolvePageCopyText(
+  tab: ViewerTabDefinition,
+  currentPage: number,
+): Promise<string | null> {
+  const inlineCopy = findPageCopy(tab.pageCopies, currentPage);
+  if (inlineCopy) {
+    return inlineCopy;
+  }
+
+  if (!tab.pagePreviewHref) {
+    return null;
   }
 
   try {
-    return JSON.stringify(JSON.parse(tab.content ?? "{}"), null, 2);
+    const response = await fetch(`${tab.pagePreviewHref}?page=${currentPage}`);
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as { content?: unknown };
+    if (typeof payload.content !== "string") {
+      return null;
+    }
+
+    return payload.content;
   } catch {
-    return tab.content ?? "";
+    return null;
+  }
+}
+
+function findPageCopy(
+  pageCopies: PreviewPagePayload[] | undefined,
+  currentPage: number,
+): string | null {
+  if (!pageCopies?.length) {
+    return null;
+  }
+
+  return pageCopies.find((page) => page.pageNumber === currentPage)?.content ?? null;
+}
+
+function formatPanelContent(tab: ViewerTabDefinition, content: string | null = tab.content): string {
+  if (tab.panelType !== "json") {
+    return content ?? "";
+  }
+
+  try {
+    return JSON.stringify(JSON.parse(content ?? "{}"), null, 2);
+  } catch {
+    return content ?? "";
   }
 }
 
@@ -873,4 +950,29 @@ function getRotationTransform(rotation: number, width: number, height: number): 
   }
 
   return "none";
+}
+
+function clearCanvas(canvas: HTMLCanvasElement | null) {
+  if (!canvas) {
+    return;
+  }
+
+  canvas.width = 0;
+  canvas.height = 0;
+  canvas.style.width = "";
+  canvas.style.height = "";
+}
+
+function isRenderCancelled(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const name = "name" in error ? String(error.name ?? "") : "";
+  if (name === "RenderingCancelledException") {
+    return true;
+  }
+
+  const message = "message" in error ? String(error.message ?? "") : "";
+  return message.toLowerCase().includes("cancel");
 }

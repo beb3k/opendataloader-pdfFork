@@ -13,7 +13,12 @@ vi.mock("./components/BoundingBoxPreview", () => ({
     sourceFile: File | null;
     jsonUrl: string | null;
     activeTab: string;
-    tabs: Array<{ id: string; label: string; enabled: boolean }>;
+    tabs: Array<{
+      id: string;
+      label: string;
+      enabled: boolean;
+      pageCopies?: Array<{ pageNumber: number; content: string }>;
+    }>;
   }) => (
     <div data-testid="bbox-preview">
       <div>{sourceFile?.name ?? "no-source"}</div>
@@ -22,6 +27,17 @@ vi.mock("./components/BoundingBoxPreview", () => ({
       <div data-testid="viewer-tab-order">{tabs.map((tab) => tab.label).join("|")}</div>
       <div data-testid="viewer-enabled-tabs">
         {tabs.filter((tab) => tab.enabled).map((tab) => tab.id).join("|")}
+      </div>
+      <div data-testid="viewer-page-copies">
+        {tabs
+          .filter((tab) => tab.pageCopies?.length)
+          .map(
+            (tab) =>
+              `${tab.id}:${tab.pageCopies
+                ?.map((page) => `${page.pageNumber}:${page.content}`)
+                .join("|")}`,
+          )
+          .join("||")}
       </div>
     </div>
   ),
@@ -160,6 +176,59 @@ describe("App", () => {
     expect(screen.getByTestId("bbox-preview")).toBeInTheDocument();
   });
 
+  it("remounts the upload input after start over so the same pdf can be selected again", async () => {
+    const api = createApi();
+    const file = new File(["pdf"], "sample.pdf", { type: "application/pdf" });
+
+    render(<App api={api} storage={createMemoryStorage()} />);
+
+    const firstInput = screen.getByLabelText(/browse files/i);
+    fireEvent.change(firstInput, { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("button", { name: /create job/i }));
+
+    expect(await screen.findByRole("heading", { name: /results/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /start over/i }));
+
+    expect(screen.queryByRole("heading", { name: /results/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/no file selected/i)).toBeInTheDocument();
+
+    const secondInput = screen.getByLabelText(/browse files/i);
+    expect(secondInput).not.toBe(firstInput);
+
+    fireEvent.change(secondInput, { target: { files: [file] } });
+
+    expect(screen.getByText("sample.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /options/i })).toBeInTheDocument();
+  });
+
+  it("lets the next job start immediately after start over", async () => {
+    const createJob = vi.fn(async (_file: File, _options: ComposeOptions): Promise<JobRecord> => ({
+      id: "job-1",
+      status: "queued",
+      progress: 0,
+      message: "Queued",
+      sourceName: "sample.pdf",
+      files: [],
+    }));
+    const api = createApi({ createJob });
+
+    render(<App api={api} storage={createMemoryStorage()} />);
+
+    selectPdf();
+    fireEvent.click(screen.getByRole("button", { name: /create job/i }));
+    expect(await screen.findByRole("heading", { name: /results/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /start over/i }));
+    expect(screen.queryByRole("heading", { name: /results/i })).not.toBeInTheDocument();
+
+    selectPdf();
+    fireEvent.click(screen.getByRole("button", { name: /create job/i }));
+
+    expect(await screen.findByRole("heading", { name: /results/i })).toBeInTheDocument();
+    expect(createJob).toHaveBeenCalledTimes(2);
+  });
+
   it("persists the advanced drawer during the session", async () => {
     const storage = createMemoryStorage();
 
@@ -240,6 +309,42 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByTestId("active-viewer-tab")).toHaveTextContent("annot");
     });
+  });
+
+  it("passes page-aware preview data through the viewer tabs", async () => {
+    const completeJob: JobRecord = {
+      id: "job-7",
+      status: "complete",
+      progress: 100,
+      message: "Done",
+      sourceName: "sample.pdf",
+      files: [
+        {
+          name: "sample.md",
+          kind: "markdown",
+          preview: {
+            kind: "markdown",
+            content: "# Title",
+            pages: [
+              { pageNumber: 1, content: "Page 1 copy" },
+              { pageNumber: 2, content: "Page 2 copy" },
+            ],
+          },
+        },
+      ],
+    };
+    const api = createApi({
+      createJob: vi.fn(async (_file: File, _options: ComposeOptions) => completeJob),
+    });
+
+    render(<App api={api} storage={createMemoryStorage()} />);
+
+    selectPdf();
+    fireEvent.click(screen.getByRole("button", { name: /create job/i }));
+
+    expect(await screen.findByTestId("viewer-page-copies")).toHaveTextContent(
+      "markdown:1:Page 1 copy|2:Page 2 copy",
+    );
   });
 
   it("keeps preview disabled when plain text output is absent", async () => {

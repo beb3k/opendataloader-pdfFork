@@ -630,6 +630,7 @@ select {
   display: grid;
   gap: 12px;
   padding: 16px;
+  align-content: start;
   overflow-y: auto;
 }
 
@@ -637,6 +638,7 @@ select {
   display: grid;
   gap: 10px;
   justify-items: center;
+  align-self: start;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -658,6 +660,11 @@ select {
 .bbox-page-thumb-frame,
 .bbox-canvas-frame {
   position: relative;
+}
+
+.bbox-page-thumb-frame,
+.bbox-page-thumb-transform {
+  display: block;
 }
 
 .bbox-page-thumb-transform,

@@ -12,6 +12,8 @@ import type {
   JobFile,
   JobRecord,
   MarkdownStyle,
+  PreviewPagePayload,
+  PreviewPayload,
   OutputFormat,
   StorageLike,
   UiApi,
@@ -73,6 +75,8 @@ export default function App({ api = createBrowserApi(), storage, initialJob }: A
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [job, setJob] = useState<JobRecord | null>(initialJob ?? null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [uploadInputKey, setUploadInputKey] = useState(0);
+  const [viewerResetKey, setViewerResetKey] = useState(0);
   const [advancedOpen, setAdvancedOpen] = useState(() =>
     readSessionFlag(backingStorage, STORAGE_KEY),
   );
@@ -205,6 +209,17 @@ export default function App({ api = createBrowserApi(), storage, initialJob }: A
     setSelectedFile(file);
   }
 
+  function resetWorkflow() {
+    setIsSubmitting(false);
+    setJob(null);
+    setSelectedFile(null);
+    setFileError(null);
+    setSubmitError(null);
+    setActiveViewerTab("pdf");
+    setUploadInputKey((current) => current + 1);
+    setViewerResetKey((current) => current + 1);
+  }
+
   function openAdvanced() {
     setAdvancedOpen(true);
   }
@@ -274,6 +289,7 @@ export default function App({ api = createBrowserApi(), storage, initialJob }: A
             onFile={handleFileChange}
             onDrop={handleFileChange}
             error={fileError}
+            inputKey={uploadInputKey}
           />
         </WorkflowCard>
 
@@ -306,6 +322,7 @@ export default function App({ api = createBrowserApi(), storage, initialJob }: A
             summary="This card becomes the viewer as soon as the job starts."
           >
             <ResultsCard
+              key={viewerResetKey}
               job={job}
               isSubmitting={isSubmitting}
               sourceFile={selectedFile}
@@ -314,13 +331,7 @@ export default function App({ api = createBrowserApi(), storage, initialJob }: A
               setActiveViewerTab={setActiveViewerTab}
               tabs={viewerTabs}
               submitError={submitError}
-              onReset={() => {
-                setJob(null);
-                setSelectedFile(null);
-                setFileError(null);
-                setSubmitError(null);
-                setActiveViewerTab("pdf");
-              }}
+              onReset={resetWorkflow}
             />
           </WorkflowCard>
         ) : null}
@@ -397,6 +408,9 @@ function buildViewerTabs({
   const jsonFile = findOutputFile(files, "json");
   const htmlFile = findOutputFile(files, "html");
   const textFile = findOutputFile(files, "text");
+  const markdownPageCopies = buildPageCopies(markdownFile?.preview);
+  const jsonPageCopies = buildPageCopies(jsonFile?.preview);
+  const textPageCopies = buildPageCopies(textFile?.preview);
 
   return VIEWER_TAB_ORDER.map((id) => {
     switch (id) {
@@ -409,6 +423,8 @@ function buildViewerTabs({
           panelType: "pdf",
           content: null,
           copyText: null,
+          pageCopies: undefined,
+          pagePreviewHref: null,
           downloadHref: sourceFileUrl,
           downloadName: sourceFile?.name ?? null,
           dataUrl: null,
@@ -422,12 +438,14 @@ function buildViewerTabs({
           panelType: "annot",
           content: null,
           copyText: null,
+          pageCopies: jsonPageCopies,
+          pagePreviewHref: null,
           downloadHref: null,
           downloadName: null,
           dataUrl: job && jsonFile ? api.downloadFileUrl(job.id, jsonFile.name) : null,
         } satisfies ViewerTabDefinition;
       case "preview":
-        return createTextTab(id, VIEWER_TAB_LABELS[id], api, job, textFile, isBusy);
+        return createTextTab(id, VIEWER_TAB_LABELS[id], api, job, textFile, isBusy, textPageCopies);
       case "html":
         return {
           id,
@@ -437,12 +455,22 @@ function buildViewerTabs({
           panelType: "html",
           content: htmlFile?.preview?.content ?? null,
           copyText: null,
+          pageCopies: undefined,
+          pagePreviewHref: null,
           downloadHref: job && htmlFile ? api.downloadFileUrl(job.id, htmlFile.name) : null,
           downloadName: htmlFile?.name ?? null,
           dataUrl: null,
         } satisfies ViewerTabDefinition;
       case "markdown":
-        return createTextTab(id, VIEWER_TAB_LABELS[id], api, job, markdownFile, isBusy);
+        return createTextTab(
+          id,
+          VIEWER_TAB_LABELS[id],
+          api,
+          job,
+          markdownFile,
+          isBusy,
+          markdownPageCopies,
+        );
       case "json":
         return {
           id,
@@ -452,6 +480,8 @@ function buildViewerTabs({
           panelType: "json",
           content: jsonFile?.preview?.content ?? null,
           copyText: jsonFile?.preview?.content ?? null,
+          pageCopies: jsonPageCopies,
+          pagePreviewHref: buildPagePreviewHref(job, jsonFile, api),
           downloadHref: job && jsonFile ? api.downloadFileUrl(job.id, jsonFile.name) : null,
           downloadName: jsonFile?.name ?? null,
           dataUrl: null,
@@ -467,6 +497,7 @@ function createTextTab(
   job: JobRecord | null,
   file: JobFile | null,
   isBusy: boolean,
+  pageCopies?: PreviewPagePayload[],
 ): ViewerTabDefinition {
   return {
     id,
@@ -476,6 +507,8 @@ function createTextTab(
     panelType: "text",
     content: file?.preview?.content ?? null,
     copyText: file?.preview?.content ?? null,
+    pageCopies,
+    pagePreviewHref: buildPagePreviewHref(job, file, api),
     downloadHref: job && file ? api.downloadFileUrl(job.id, file.name) : null,
     downloadName: file?.name ?? null,
     dataUrl: null,
@@ -484,6 +517,29 @@ function createTextTab(
 
 function findOutputFile(files: JobFile[], kind: JobFile["kind"]): JobFile | null {
   return files.find((file) => file.kind === kind || file.preview?.kind === kind) ?? null;
+}
+
+function buildPageCopies(preview: PreviewPayload | undefined): PreviewPagePayload[] | undefined {
+  if (!preview?.pages?.length) {
+    return undefined;
+  }
+
+  return preview.pages.map((page) => ({
+    pageNumber: page.pageNumber,
+    content: page.content,
+  }));
+}
+
+function buildPagePreviewHref(
+  job: JobRecord | null,
+  file: JobFile | null,
+  api: UiApi,
+): string | null {
+  if (!job || !file) {
+    return null;
+  }
+
+  return `${api.downloadFileUrl(job.id, file.name)}/preview`;
 }
 
 function WorkflowCard({
@@ -530,11 +586,13 @@ function UploadCard({
   onFile,
   onDrop,
   error,
+  inputKey,
 }: {
   file: File | null;
   onFile: (file: File | null) => void;
   onDrop: (file: File | null) => void;
   error: string | null;
+  inputKey: number;
 }) {
   const [dragActive, setDragActive] = useState(false);
 
@@ -563,6 +621,7 @@ function UploadCard({
 
       <label className="file-picker">
         <input
+          key={inputKey}
           type="file"
           accept="application/pdf"
           onChange={(event) => onFile(event.target.files?.[0] ?? null)}
