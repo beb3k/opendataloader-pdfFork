@@ -18,18 +18,60 @@ def fake_converter(input_path: str, **kwargs: object) -> None:
     formats = kwargs["format"]
     assert isinstance(formats, list)
     base_name = Path(input_path).stem
+    page_suffix = _page_suffix(kwargs)
+    page_number = _page_number(kwargs)
+
     for fmt in formats:
+        extension = _output_extension(str(fmt))
+
         match fmt:
-            case "markdown":
-                (output_dir / f"{base_name}.md").write_text("# Preview\n\nConverted", encoding="utf-8")
+            case "markdown" | "markdown-with-html" | "markdown-with-images":
+                (output_dir / f"{base_name}.{extension}").write_text(
+                    f"# Preview{page_suffix}\n\nConverted",
+                    encoding="utf-8",
+                )
             case "json":
-                (output_dir / f"{base_name}.json").write_text('{"ok": true}', encoding="utf-8")
+                (output_dir / f"{base_name}.{extension}").write_text(
+                    f'{{"ok": true, "page": {page_number}}}',
+                    encoding="utf-8",
+                )
             case "html":
-                (output_dir / f"{base_name}.html").write_text("<p>Converted</p>", encoding="utf-8")
+                (output_dir / f"{base_name}.{extension}").write_text(
+                    f"<p>Converted{page_suffix}</p>",
+                    encoding="utf-8",
+                )
             case "text":
-                (output_dir / f"{base_name}.txt").write_text("Converted", encoding="utf-8")
+                (output_dir / f"{base_name}.{extension}").write_text(
+                    f"Converted{page_suffix}",
+                    encoding="utf-8",
+                )
             case _:
-                (output_dir / f"{base_name}.{fmt}").write_text("placeholder", encoding="utf-8")
+                (output_dir / f"{base_name}.{extension}").write_text("placeholder", encoding="utf-8")
+
+
+def _page_suffix(kwargs: dict[str, object]) -> str:
+    pages = kwargs.get("pages")
+    if not pages:
+        return ""
+
+    return f" page {pages}"
+
+
+def _page_number(kwargs: dict[str, object]) -> int:
+    pages = kwargs.get("pages")
+    if not pages:
+        return 0
+
+    return int(str(pages))
+
+
+def _output_extension(fmt: str) -> str:
+    if fmt.startswith("markdown"):
+        return "md"
+    if fmt == "text":
+        return "txt"
+
+    return fmt
 
 
 def make_client(tmp_path: Path) -> tuple[TestClient, JobService]:
@@ -214,3 +256,58 @@ def test_download_routes_work(tmp_path: Path) -> None:
     bundle_response = client.get(f"/jobs/{job_id}/bundle")
     assert bundle_response.status_code == 200
     assert bundle_response.headers["content-type"] == "application/zip"
+
+
+def test_page_preview_route_returns_selected_page_content(tmp_path: Path) -> None:
+    client, _service = make_client(tmp_path)
+    response = post_job(client, {"formats": ["markdown", "json", "text"], "markdownStyle": "plain"})
+    job_id = response.json()["id"]
+
+    downloaded_markdown = client.get(f"/jobs/{job_id}/files/sample.md")
+    assert downloaded_markdown.status_code == 200
+    assert downloaded_markdown.text.replace("\r\n", "\n") == "# Preview\n\nConverted"
+
+    markdown_preview = client.get(f"/jobs/{job_id}/files/sample.md/preview", params={"page": 2})
+    text_preview = client.get(f"/jobs/{job_id}/files/sample.txt/preview", params={"page": 2})
+    json_preview = client.get(f"/jobs/{job_id}/files/sample.json/preview", params={"page": 2})
+
+    assert markdown_preview.status_code == 200
+    assert markdown_preview.json() == {
+        "kind": "markdown",
+        "content": "# Preview page 2\n\nConverted",
+    }
+    assert text_preview.status_code == 200
+    assert text_preview.json() == {
+        "kind": "text",
+        "content": "Converted page 2",
+    }
+    assert json_preview.status_code == 200
+    assert json_preview.json() == {
+        "kind": "json",
+        "content": '{"ok": true, "page": 2}',
+    }
+
+
+def test_page_preview_route_returns_html_content_for_selected_page(tmp_path: Path) -> None:
+    client, _service = make_client(tmp_path)
+    response = post_job(client, {"formats": ["html"], "markdownStyle": "plain"})
+    job_id = response.json()["id"]
+
+    html_preview = client.get(f"/jobs/{job_id}/files/sample.html/preview", params={"page": 2})
+
+    assert html_preview.status_code == 200
+    assert html_preview.json() == {
+        "kind": "html",
+        "content": "<p>Converted page 2</p>",
+    }
+
+
+def test_page_preview_route_rejects_page_numbers_below_one(tmp_path: Path) -> None:
+    client, _service = make_client(tmp_path)
+    response = post_job(client, {"formats": ["html"], "markdownStyle": "plain"})
+    job_id = response.json()["id"]
+
+    invalid_preview = client.get(f"/jobs/{job_id}/files/sample.html/preview", params={"page": 0})
+
+    assert invalid_preview.status_code == 422
+    assert invalid_preview.json()["detail"][0]["loc"] == ["query", "page"]
