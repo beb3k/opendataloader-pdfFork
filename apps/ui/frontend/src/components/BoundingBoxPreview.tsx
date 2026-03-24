@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import {
   parseOverlayDocument,
   projectBoundingBox,
@@ -17,6 +18,7 @@ const MIN_ZOOM = 0.6;
 const MAX_ZOOM = 2.4;
 const ZOOM_STEP = 0.2;
 const THUMBNAIL_WIDTH = 132;
+const PAGE_EDGE_MARGIN = 48;
 
 export type ViewerTab = "pdf" | "annot" | "preview" | "html" | "markdown" | "json";
 
@@ -63,12 +65,35 @@ interface ThumbnailButtonProps {
   onSelect: () => void;
   pageNumber: number;
   pdfDocument: PDFDocumentProxy;
-  rotation: number;
 }
 
 interface CanvasRenderTask {
   promise: Promise<unknown>;
   cancel: () => void;
+}
+
+interface PagePanelState {
+  status: "idle" | "loading" | "ready" | "error";
+  content: string | null;
+  errorMessage: string | null;
+}
+
+interface HandDragState {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  panX: number;
+  panY: number;
+}
+
+interface ViewerSize {
+  width: number;
+  height: number;
+}
+
+interface PanOffset {
+  x: number;
+  y: number;
 }
 
 export default function BoundingBoxPreview({
@@ -80,13 +105,14 @@ export default function BoundingBoxPreview({
 }: BoundingBoxPreviewProps) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const handDragRef = useRef<HandDragState | null>(null);
   const activeDefinition = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
   const isDocumentTab = activeDefinition?.panelType === "pdf" || activeDefinition?.panelType === "annot";
 
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [pageCount, setPageCount] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
-  const [viewerWidth, setViewerWidth] = useState(0);
+  const [viewerSize, setViewerSize] = useState<ViewerSize>({ width: 0, height: 0 });
   const [renderedPage, setRenderedPage] = useState<RenderedPage | null>(null);
   const [pdfState, setPdfState] = useState<"loading" | "ready" | "error" | "idle">("idle");
   const [pdfErrorMessage, setPdfErrorMessage] = useState<string | null>(null);
@@ -94,7 +120,17 @@ export default function BoundingBoxPreview({
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [rotation, setRotation] = useState(0);
+  const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
+  const [isHandToolOn, setIsHandToolOn] = useState(false);
+  const [isHandDragging, setIsHandDragging] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [pageInputValue, setPageInputValue] = useState("1");
+  const [pageInputError, setPageInputError] = useState<string | null>(null);
+  const [pagePanelState, setPagePanelState] = useState<PagePanelState>({
+    status: "idle",
+    content: null,
+    errorMessage: null,
+  });
   const [visibleCategories, setVisibleCategories] = useState<Record<OverlayCategory, boolean>>({
     text: true,
     table: true,
@@ -111,21 +147,24 @@ export default function BoundingBoxPreview({
       return;
     }
 
-    const updateWidth = () => {
-      setViewerWidth(Math.max(0, Math.floor(element.clientWidth)));
+    const updateViewerSize = () => {
+      setViewerSize({
+        width: Math.max(0, Math.floor(element.clientWidth)),
+        height: Math.max(0, Math.floor(element.clientHeight)),
+      });
     };
 
-    updateWidth();
+    updateViewerSize();
 
     if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", updateWidth);
+      window.addEventListener("resize", updateViewerSize);
       return () => {
-        window.removeEventListener("resize", updateWidth);
+        window.removeEventListener("resize", updateViewerSize);
       };
     }
 
     const observer = new ResizeObserver(() => {
-      updateWidth();
+      updateViewerSize();
     });
     observer.observe(element);
 
@@ -249,7 +288,7 @@ export default function BoundingBoxPreview({
   }, [jsonUrl]);
 
   useEffect(() => {
-    if (!isDocumentTab || !pdfDocument || !canvasRef.current || !viewerWidth) {
+    if (!isDocumentTab || !pdfDocument || !canvasRef.current || !viewerSize.width) {
       return;
     }
 
@@ -267,7 +306,7 @@ export default function BoundingBoxPreview({
 
         const baseViewport = page.getViewport({ scale: 1 });
         const fitWidth = usesVerticalLayout(rotation) ? baseViewport.height : baseViewport.width;
-        const scale = (viewerWidth / fitWidth) * zoomLevel;
+        const scale = (viewerSize.width / fitWidth) * zoomLevel;
         const viewport = page.getViewport({ scale });
         const context = activeCanvas.getContext("2d");
 
@@ -323,15 +362,134 @@ export default function BoundingBoxPreview({
       renderTask?.cancel();
       clearCanvas(activeCanvas);
     };
-  }, [currentPage, isDocumentTab, pdfDocument, rotation, viewerWidth, zoomLevel]);
+  }, [currentPage, isDocumentTab, pdfDocument, rotation, viewerSize.width, zoomLevel]);
 
   useEffect(() => {
     setCurrentPage((current) => Math.min(current, pageCount));
   }, [pageCount]);
 
   useEffect(() => {
+    setPageInputValue(String(currentPage));
+    setPageInputError(null);
+  }, [currentPage]);
+
+  useEffect(() => {
+    if (isDocumentTab) {
+      return;
+    }
+
+    handDragRef.current = null;
+    setIsHandDragging(false);
+    setIsHandToolOn(false);
+    setPanOffset({ x: 0, y: 0 });
+  }, [isDocumentTab]);
+
+  useEffect(() => {
+    setPanOffset({ x: 0, y: 0 });
+  }, [currentPage, rotation]);
+
+  useEffect(() => {
+    if (!renderedPage || !viewerSize.width || !viewerSize.height) {
+      setPanOffset({ x: 0, y: 0 });
+      return;
+    }
+
+    const bounds = getPanBounds(renderedPage, viewerSize);
+    setPanOffset((current) => ({
+      x: clampPan(current.x, bounds.minX, bounds.maxX),
+      y: clampPan(current.y, bounds.minY, bounds.maxY),
+    }));
+  }, [renderedPage, viewerSize]);
+
+  useEffect(() => {
     setCopyFeedback(null);
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!activeDefinition || isDocumentTab) {
+      setPagePanelState({
+        status: "idle",
+        content: null,
+        errorMessage: null,
+      });
+      return;
+    }
+
+    if (!activeDefinition.enabled) {
+      setPagePanelState({
+        status: "ready",
+        content: null,
+        errorMessage: null,
+      });
+      return;
+    }
+
+    const inlineContent = findPageCopy(activeDefinition.pageCopies, currentPage);
+    if (inlineContent !== null) {
+      setPagePanelState({
+        status: "ready",
+        content: inlineContent,
+        errorMessage: null,
+      });
+      return;
+    }
+
+    if (!activeDefinition.pagePreviewHref) {
+      setPagePanelState({
+        status: "ready",
+        content: activeDefinition.content,
+        errorMessage: null,
+      });
+      return;
+    }
+
+    const controller = new AbortController();
+    let cancelled = false;
+
+    setPagePanelState({
+      status: "loading",
+      content: null,
+      errorMessage: null,
+    });
+
+    async function loadPagePanel() {
+      try {
+        const content = await fetchPagePanelContent(
+          activeDefinition.pagePreviewHref ?? null,
+          currentPage,
+          controller.signal,
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        setPagePanelState({
+          status: "ready",
+          content,
+          errorMessage: null,
+        });
+      } catch (error) {
+        if (cancelled || controller.signal.aborted) {
+          return;
+        }
+
+        setPagePanelState({
+          status: "error",
+          content: null,
+          errorMessage:
+            error instanceof Error ? error.message : `Could not load page ${currentPage}.`,
+        });
+      }
+    }
+
+    void loadPagePanel();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [activeDefinition, currentPage, isDocumentTab]);
 
   const pageBoxes = useMemo(() => {
     const boxes = overlayDocument.boxesByPage.get(currentPage) ?? [];
@@ -348,21 +506,61 @@ export default function BoundingBoxPreview({
   const canZoomOut = pdfState === "ready" && zoomLevel > MIN_ZOOM;
   const canZoomIn = pdfState === "ready" && zoomLevel < MAX_ZOOM;
   const canUseViewerControls = pdfState === "ready";
+  const isPageAwareTab = Boolean(activeDefinition);
+  const canUseHandTool = canUseViewerControls;
+  const handToolLabel = canUseHandTool
+    ? isHandToolOn
+      ? "Turn off hand tool"
+      : "Turn on hand tool"
+    : "Wait for the page to load";
   const isCopyablePanel = activeDefinition?.panelType === "text" || activeDefinition?.panelType === "json";
   const canCopy = Boolean(
     isCopyablePanel &&
+      pagePanelState.status !== "error" &&
       (activeDefinition?.copyText ||
         activeDefinition?.pageCopies?.length ||
         activeDefinition?.pagePreviewHref),
   );
   const showDownload = Boolean(activeDefinition?.downloadHref && activeDefinition?.downloadName);
   const showOverlay = activeDefinition?.panelType === "annot";
+  const activePanelContent = pagePanelState.content ?? activeDefinition?.content ?? null;
+  const framePosition = getFramePosition(renderedPage, viewerSize, panOffset);
 
   function toggleCategory(category: OverlayCategory) {
     setVisibleCategories((current) => ({
       ...current,
       [category]: !current[category],
     }));
+  }
+
+  function goToPage(pageNumber: number) {
+    const nextPage = clampPageNumber(pageNumber, pageCount);
+    setCurrentPage(nextPage);
+  }
+
+  function handlePageInputChange(value: string) {
+    const nextValue = value.replace(/\D/g, "");
+    setPageInputValue(nextValue);
+    setPageInputError(null);
+  }
+
+  function commitPageInput() {
+    const trimmedValue = pageInputValue.trim();
+    if (!trimmedValue) {
+      setPageInputError(`Enter a page from 1 to ${pageCount}.`);
+      setPageInputValue(String(currentPage));
+      return;
+    }
+
+    const requestedPage = Number(trimmedValue);
+    if (!Number.isInteger(requestedPage) || requestedPage < 1 || requestedPage > pageCount) {
+      setPageInputError(`Enter a page from 1 to ${pageCount}.`);
+      setPageInputValue(String(currentPage));
+      return;
+    }
+
+    setPageInputError(null);
+    goToPage(requestedPage);
   }
 
   function zoomIn() {
@@ -381,12 +579,88 @@ export default function BoundingBoxPreview({
     setRotation((current) => normalizeRotation(current - 90));
   }
 
+  function toggleHandTool() {
+    if (!canUseHandTool) {
+      return;
+    }
+
+    handDragRef.current = null;
+    setIsHandDragging(false);
+    setIsHandToolOn((current) => !current);
+  }
+
+  function stopHandDrag(pointerId?: number) {
+    const dragState = handDragRef.current;
+    if (!dragState) {
+      return;
+    }
+
+    if (pointerId !== undefined && dragState.pointerId !== pointerId) {
+      return;
+    }
+
+    handDragRef.current = null;
+    setIsHandDragging(false);
+    viewerRef.current?.releasePointerCapture?.(dragState.pointerId);
+  }
+
+  function handleStagePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!isHandToolOn || !renderedPage) {
+      return;
+    }
+
+    if (event.button > 0) {
+      return;
+    }
+
+    const viewer = viewerRef.current;
+    if (!viewer) {
+      return;
+    }
+
+    const pointerPosition = getPointerPosition(event);
+    handDragRef.current = {
+      pointerId: event.pointerId,
+      startX: pointerPosition.x,
+      startY: pointerPosition.y,
+      panX: panOffset.x,
+      panY: panOffset.y,
+    };
+    setIsHandDragging(true);
+    viewer.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  }
+
+  function handleStagePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const dragState = handDragRef.current;
+    const viewer = viewerRef.current;
+
+    if (!dragState || !viewer) {
+      return;
+    }
+
+    if (dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const pointerPosition = getPointerPosition(event);
+    const deltaX = pointerPosition.x - dragState.startX;
+    const deltaY = pointerPosition.y - dragState.startY;
+    const bounds = getPanBounds(renderedPage, viewerSize);
+
+    setPanOffset({
+      x: clampPan(dragState.panX + deltaX, bounds.minX, bounds.maxX),
+      y: clampPan(dragState.panY + deltaY, bounds.minY, bounds.maxY),
+    });
+    event.preventDefault();
+  }
+
   async function copyCurrentPanel() {
     if (!activeDefinition || !navigator.clipboard?.writeText) {
       return;
     }
 
-    const pageCopy = await resolvePageCopyText(activeDefinition, currentPage);
+    const pageCopy = pagePanelState.content ?? (await resolvePageCopyText(activeDefinition, currentPage));
     const nextCopyText = pageCopy ?? activeDefinition.copyText;
     if (!nextCopyText) {
       return;
@@ -420,7 +694,6 @@ export default function BoundingBoxPreview({
                   onSelect={() => setCurrentPage(pageNumber)}
                   pageNumber={pageNumber}
                   pdfDocument={pdfDocument}
-                  rotation={rotation}
                 />
               ))}
             </div>
@@ -475,41 +748,50 @@ export default function BoundingBoxPreview({
         </div>
 
         <div className="bbox-tab-panel">
-          {canCopy ? (
-            <button
-              type="button"
-              className="bbox-copy-button"
-              onClick={() => {
-                void copyCurrentPanel();
-              }}
-              aria-label={copyFeedback ?? "Copy current content"}
-              title={copyFeedback ?? "Copy current content"}
-            >
-              {"\u29c9"}
-            </button>
-          ) : null}
+          {isPageAwareTab ? (
+            <div className="bbox-panel-toolbar">
+              <div className="bbox-page-controls" role="group" aria-label="PDF page navigation">
+                <SymbolButton
+                  symbol={"\u2190"}
+                  label="Previous page"
+                  onClick={() => goToPage(currentPage - 1)}
+                  disabled={!canGoToPreviousPage}
+                />
 
-          {isDocumentTab ? (
-            <>
-              <div className="bbox-panel-toolbar">
-                <div className="bbox-page-controls" role="group" aria-label="PDF page navigation">
-                  <SymbolButton
-                    symbol={"\u2190"}
-                    label="Previous page"
-                    onClick={() => setCurrentPage((current) => Math.max(1, current - 1))}
-                    disabled={!canGoToPreviousPage}
-                  />
-                  <span>
-                    Page {currentPage} of {pageCount}
-                  </span>
-                  <SymbolButton
-                    symbol={"\u2192"}
-                    label="Next page"
-                    onClick={() => setCurrentPage((current) => Math.min(pageCount, current + 1))}
-                    disabled={!canGoToNextPage}
-                  />
-                </div>
+                <label className="bbox-page-input-shell">
+                  <span className="bbox-page-input-label">Page</span>
+                  <input
+                    className="bbox-page-input"
+                    type="text"
+                    inputMode="numeric"
+                    value={pageInputValue}
+                    onChange={(event) => handlePageInputChange(event.target.value)}
+                    onBlur={commitPageInput}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter") {
+                        return;
+                      }
 
+                      event.preventDefault();
+                      commitPageInput();
+                    }}
+                    aria-label="Page number"
+                    aria-invalid={pageInputError ? "true" : "false"}
+                    disabled={!canUseViewerControls}
+                  />
+                </label>
+
+                <span className="bbox-page-count">of {pageCount}</span>
+
+                <SymbolButton
+                  symbol={"\u2192"}
+                  label="Next page"
+                  onClick={() => goToPage(currentPage + 1)}
+                  disabled={!canGoToNextPage}
+                />
+              </div>
+
+              {isDocumentTab ? (
                 <div className="bbox-view-controls" role="group" aria-label="Viewer controls">
                   <SymbolButton
                     symbol={"\u2630"}
@@ -531,6 +813,13 @@ export default function BoundingBoxPreview({
                     disabled={!canZoomIn}
                   />
                   <SymbolButton
+                    symbol={"\u270b"}
+                    label={handToolLabel}
+                    onClick={toggleHandTool}
+                    disabled={!canUseHandTool}
+                    pressed={isHandToolOn}
+                  />
+                  <SymbolButton
                     symbol={"\u21ba"}
                     label="Rotate counter clockwise"
                     onClick={rotateCounterClockwise}
@@ -543,88 +832,125 @@ export default function BoundingBoxPreview({
                     disabled={!canUseViewerControls}
                   />
                 </div>
+              ) : null}
 
-                {showOverlay ? (
-                  <div className="bbox-legend">
-                    {(Object.keys(CATEGORY_LABELS) as OverlayCategory[]).map((category) => (
-                      <button
-                        key={category}
-                        type="button"
-                        className={`bbox-chip ${visibleCategories[category] ? `is-${category}` : "is-muted"}`}
-                        aria-pressed={visibleCategories[category]}
-                        onClick={() => toggleCategory(category)}
-                      >
-                        {CATEGORY_LABELS[category]} ({overlayDocument.counts[category]})
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
+              {canCopy ? (
+                <button
+                  type="button"
+                  className="bbox-copy-button"
+                  onClick={() => {
+                    void copyCurrentPanel();
+                  }}
+                  aria-label={copyFeedback ?? "Copy current content"}
+                  title={copyFeedback ?? "Copy current content"}
+                >
+                  {"\u29c9"}
+                </button>
+              ) : null}
 
+              {showOverlay ? (
+                <div className="bbox-legend">
+                  {(Object.keys(CATEGORY_LABELS) as OverlayCategory[]).map((category) => (
+                    <button
+                      key={category}
+                      type="button"
+                      className={`bbox-chip ${visibleCategories[category] ? `is-${category}` : "is-muted"}`}
+                      aria-pressed={visibleCategories[category]}
+                      onClick={() => toggleCategory(category)}
+                    >
+                      {CATEGORY_LABELS[category]} ({overlayDocument.counts[category]})
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
+              {pageInputError ? <p className="bbox-page-error">{pageInputError}</p> : null}
+            </div>
+          ) : null}
+
+          <div className="bbox-panel-content">
+            {isDocumentTab ? (
               <div className={`bbox-document-shell ${isSidebarOpen ? "" : "is-rail-hidden"}`.trim()}>
-                <div ref={viewerRef} className="bbox-document-stage">
+                <div
+                  ref={viewerRef}
+                  className={`bbox-document-stage ${isHandToolOn ? "is-hand-tool-on" : ""} ${isHandDragging ? "is-dragging" : ""}`.trim()}
+                  onPointerDown={handleStagePointerDown}
+                  onPointerMove={handleStagePointerMove}
+                  onPointerUp={(event) => stopHandDrag(event.pointerId)}
+                  onPointerCancel={(event) => stopHandDrag(event.pointerId)}
+                  onLostPointerCapture={(event) => stopHandDrag(event.pointerId)}
+                >
                   {pdfState === "error" ? (
                     <div className="bbox-empty-panel">
                       <p>{pdfErrorMessage ?? "Could not load the PDF viewer."}</p>
                     </div>
                   ) : (
-                    <div
-                      className={`bbox-stage-shell ${renderedPage ? "is-ready" : "is-loading"}`.trim()}
-                    >
+                    <div className={`bbox-stage-shell ${renderedPage ? "is-ready" : "is-loading"}`.trim()}>
                       <div
-                        className="bbox-canvas-frame"
+                        className="bbox-stage-positioner"
                         style={
                           renderedPage
                             ? {
-                                width: `${renderedPage.displayWidth}px`,
-                                height: `${renderedPage.displayHeight}px`,
+                                transform: `translate(${framePosition.x}px, ${framePosition.y}px)`,
                               }
                             : undefined
                         }
                       >
                         <div
-                          className="bbox-canvas-transform"
+                          className="bbox-canvas-frame"
                           style={
                             renderedPage
                               ? {
-                                  width: `${renderedPage.baseWidth}px`,
-                                  height: `${renderedPage.baseHeight}px`,
-                                  transform: getRotationTransform(
-                                    rotation,
-                                    renderedPage.baseWidth,
-                                    renderedPage.baseHeight,
-                                  ),
+                                  width: `${renderedPage.displayWidth}px`,
+                                  height: `${renderedPage.displayHeight}px`,
                                 }
                               : undefined
                           }
                         >
-                          <canvas ref={canvasRef} className="bbox-pdf-canvas" />
+                          <div
+                            className="bbox-canvas-transform"
+                            style={
+                              renderedPage
+                                ? {
+                                    width: `${renderedPage.baseWidth}px`,
+                                    height: `${renderedPage.baseHeight}px`,
+                                    transform: getRotationTransform(
+                                      rotation,
+                                      renderedPage.baseWidth,
+                                      renderedPage.baseHeight,
+                                    ),
+                                  }
+                                : undefined
+                            }
+                          >
+                            <canvas ref={canvasRef} className="bbox-pdf-canvas" />
 
-                          {renderedPage && showOverlay ? (
-                            <div className="bbox-overlay-layer" aria-hidden="true">
-                              {pageBoxes.map((box) => {
-                                const projected = projectBoundingBox(
-                                  box.bbox,
-                                  renderedPage.baseHeight,
-                                  renderedPage.scale,
-                                );
+                            {renderedPage && showOverlay ? (
+                              <div className="bbox-overlay-layer" aria-hidden="true">
+                                {pageBoxes.map((box) => {
+                                  const projected = projectBoundingBox(
+                                    box.bbox,
+                                    renderedPage.baseHeight,
+                                    renderedPage.scale,
+                                  );
 
-                                return (
-                                  <div
-                                    key={box.id}
-                                    className={`bbox-rect is-${box.category}`}
-                                    style={{
-                                      left: `${projected.left}px`,
-                                      top: `${projected.top}px`,
-                                      width: `${projected.width}px`,
-                                      height: `${projected.height}px`,
-                                    }}
-                                    title={`${box.semanticType}: ${box.label}`}
-                                  />
-                                );
-                              })}
-                            </div>
-                          ) : null}
+                                  return (
+                                    <div
+                                      key={box.id}
+                                      className={`bbox-rect is-${box.category}`}
+                                      style={{
+                                        left: `${projected.left}px`,
+                                        top: `${projected.top}px`,
+                                        width: `${projected.width}px`,
+                                        height: `${projected.height}px`,
+                                      }}
+                                      title={`${box.semanticType}: ${box.label}`}
+                                    />
+                                  );
+                                })}
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
 
@@ -637,62 +963,130 @@ export default function BoundingBoxPreview({
                   )}
                 </div>
 
-                <div className="bbox-panel-footer">
-                  {overlayErrorMessage && showOverlay ? (
-                    <p>{overlayErrorMessage}</p>
-                  ) : showOverlay ? (
-                    <p>{pageBoxes.length} visible boxes on this page.</p>
-                  ) : (
-                    <p>Plain PDF view.</p>
-                  )}
-                </div>
+                {showOverlay ? (
+                  <div className="bbox-panel-footer">
+                    {overlayErrorMessage ? (
+                      <p>{overlayErrorMessage}</p>
+                    ) : (
+                      <p>{pageBoxes.length} visible boxes on this page.</p>
+                    )}
+                  </div>
+                ) : null}
               </div>
-            </>
-          ) : (
-            <PanelContent tab={activeDefinition} />
-          )}
+            ) : (
+              <PanelContent
+                tab={activeDefinition}
+                currentPage={currentPage}
+                content={activePanelContent}
+                pageState={pagePanelState.status}
+                pageErrorMessage={pagePanelState.errorMessage}
+              />
+            )}
+          </div>
         </div>
       </div>
     </section>
   );
 }
 
-function PanelContent({ tab }: { tab: ViewerTabDefinition | undefined }) {
+function PanelContent({
+  tab,
+  currentPage,
+  content,
+  pageState,
+  pageErrorMessage,
+}: {
+  tab: ViewerTabDefinition | undefined;
+  currentPage: number;
+  content: string | null;
+  pageState: PagePanelState["status"];
+  pageErrorMessage: string | null;
+}) {
   if (!tab) {
     return (
-      <div className="bbox-empty-panel">
-        <p>No tab is selected.</p>
-      </div>
+      <PagePanelShell>
+        <div className="bbox-empty-panel">
+          <p>No tab is selected.</p>
+        </div>
+      </PagePanelShell>
     );
   }
 
   if (tab.loading) {
     return (
-      <div className="bbox-empty-panel">
-        <p>{tab.label} is still loading.</p>
-      </div>
+      <PagePanelShell>
+        <div className="bbox-empty-panel">
+          <p>{tab.label} is still loading.</p>
+        </div>
+      </PagePanelShell>
     );
   }
 
   if (!tab.enabled) {
     return (
-      <div className="bbox-empty-panel">
-        <p>{tab.label} is not available for this job.</p>
-      </div>
+      <PagePanelShell>
+        <div className="bbox-empty-panel">
+          <p>{tab.label} is not available for this job.</p>
+        </div>
+      </PagePanelShell>
+    );
+  }
+
+  if (pageState === "loading") {
+    return (
+      <PagePanelShell>
+        <div className="bbox-empty-panel">
+          <p>Loading page {currentPage}.</p>
+        </div>
+      </PagePanelShell>
+    );
+  }
+
+  if (pageState === "error") {
+    return (
+      <PagePanelShell>
+        <div className="bbox-empty-panel">
+          <p>{pageErrorMessage ?? `Could not load page ${currentPage}.`}</p>
+        </div>
+      </PagePanelShell>
     );
   }
 
   if (tab.panelType === "html") {
-    return <iframe title={tab.label} className="bbox-html-panel" srcDoc={tab.content ?? ""} sandbox="" />;
+    return (
+      <PagePanelShell isHtml>
+        <iframe title={tab.label} className="bbox-html-panel" srcDoc={content ?? ""} sandbox="" />
+      </PagePanelShell>
+    );
   }
 
   if (tab.panelType === "json" || tab.panelType === "text") {
-    return <pre className="bbox-text-panel">{formatPanelContent(tab)}</pre>;
+    return (
+      <PagePanelShell>
+        <pre className="bbox-text-panel">{formatPanelContent(tab, content)}</pre>
+      </PagePanelShell>
+    );
   }
 
   return (
-    <div className="bbox-empty-panel">
-      <p>{tab.label} is not available right now.</p>
+    <PagePanelShell>
+      <div className="bbox-empty-panel">
+        <p>{tab.label} is not available right now.</p>
+      </div>
+    </PagePanelShell>
+  );
+}
+
+function PagePanelShell({
+  children,
+  isHtml = false,
+}: {
+  children: ReactNode;
+  isHtml?: boolean;
+}) {
+  return (
+    <div className="bbox-page-panel-shell">
+      <div className={`bbox-page-panel-card ${isHtml ? "is-html" : ""}`.trim()}>{children}</div>
     </div>
   );
 }
@@ -730,7 +1124,6 @@ function ThumbnailButton({
   onSelect,
   pageNumber,
   pdfDocument,
-  rotation,
 }: ThumbnailButtonProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [thumbnailSize, setThumbnailSize] = useState<ThumbnailSize | null>(null);
@@ -752,8 +1145,7 @@ function ThumbnailButton({
         }
 
         const baseViewport = page.getViewport({ scale: 1 });
-        const fitWidth = usesVerticalLayout(rotation) ? baseViewport.height : baseViewport.width;
-        const scale = THUMBNAIL_WIDTH / fitWidth;
+        const scale = THUMBNAIL_WIDTH / baseViewport.width;
         const viewport = page.getViewport({ scale });
         const context = activeCanvas.getContext("2d");
 
@@ -767,12 +1159,11 @@ function ThumbnailButton({
         activeCanvas.style.width = `${viewport.width}px`;
         activeCanvas.style.height = `${viewport.height}px`;
 
-        const displaySize = getDisplaySize(viewport.width, viewport.height, rotation);
         setThumbnailSize({
           baseWidth: viewport.width,
           baseHeight: viewport.height,
-          displayWidth: displaySize.width,
-          displayHeight: displaySize.height,
+          displayWidth: viewport.width,
+          displayHeight: viewport.height,
         });
 
         renderTask = page.render({
@@ -804,7 +1195,7 @@ function ThumbnailButton({
       renderTask?.cancel();
       clearCanvas(thumbnailCanvas);
     };
-  }, [pageNumber, pdfDocument, rotation]);
+  }, [pageNumber, pdfDocument]);
 
   return (
     <button
@@ -831,11 +1222,7 @@ function ThumbnailButton({
               ? {
                   width: `${thumbnailSize.baseWidth}px`,
                   height: `${thumbnailSize.baseHeight}px`,
-                  transform: getRotationTransform(
-                    rotation,
-                    thumbnailSize.baseWidth,
-                    thumbnailSize.baseHeight,
-                  ),
+                  transform: "none",
                 }
               : undefined
           }
@@ -848,12 +1235,34 @@ function ThumbnailButton({
   );
 }
 
+async function fetchPagePanelContent(
+  pagePreviewHref: string | null,
+  currentPage: number,
+  signal: AbortSignal,
+): Promise<string> {
+  if (!pagePreviewHref) {
+    return "";
+  }
+
+  const response = await fetch(`${pagePreviewHref}?page=${currentPage}`, { signal });
+  if (!response.ok) {
+    throw new Error(`Could not load page ${currentPage}.`);
+  }
+
+  const payload = (await response.json()) as { content?: unknown };
+  if (typeof payload.content !== "string") {
+    throw new Error(`Could not load page ${currentPage}.`);
+  }
+
+  return payload.content;
+}
+
 async function resolvePageCopyText(
   tab: ViewerTabDefinition,
   currentPage: number,
 ): Promise<string | null> {
   const inlineCopy = findPageCopy(tab.pageCopies, currentPage);
-  if (inlineCopy) {
+  if (inlineCopy !== null) {
     return inlineCopy;
   }
 
@@ -901,6 +1310,32 @@ function formatPanelContent(tab: ViewerTabDefinition, content: string | null = t
   }
 }
 
+function clampPageNumber(pageNumber: number, pageCount: number): number {
+  return Math.min(pageCount, Math.max(1, pageNumber));
+}
+
+function getPointerPosition(event: ReactPointerEvent<HTMLDivElement>): {
+  x: number;
+  y: number;
+} {
+  const x = readPointerCoordinate(event.clientX, event.pageX);
+  const y = readPointerCoordinate(event.clientY, event.pageY);
+
+  return { x, y };
+}
+
+function readPointerCoordinate(primary: number, fallback: number): number {
+  if (Number.isFinite(primary)) {
+    return primary;
+  }
+
+  if (Number.isFinite(fallback)) {
+    return fallback;
+  }
+
+  return 0;
+}
+
 function clampZoom(value: number): number {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(value.toFixed(2))));
 }
@@ -932,6 +1367,71 @@ function getDisplaySize(width: number, height: number, rotation: number): {
     width: height,
     height: width,
   };
+}
+
+function getPanBounds(
+  renderedPage: RenderedPage | null,
+  viewerSize: ViewerSize,
+): {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+} {
+  if (!renderedPage || !viewerSize.width || !viewerSize.height) {
+    return {
+      minX: 0,
+      maxX: 0,
+      minY: 0,
+      maxY: 0,
+    };
+  }
+
+  const frameX = getBaseFrameX(renderedPage.displayWidth, viewerSize.width);
+  const visibleWidth = Math.min(PAGE_EDGE_MARGIN, renderedPage.displayWidth / 2);
+  const visibleHeight = Math.min(PAGE_EDGE_MARGIN, renderedPage.displayHeight / 2);
+
+  return {
+    minX: visibleWidth - renderedPage.displayWidth - frameX,
+    maxX: viewerSize.width - visibleWidth - frameX,
+    minY: visibleHeight - renderedPage.displayHeight,
+    maxY: viewerSize.height - visibleHeight,
+  };
+}
+
+function clampPan(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getFramePosition(
+  renderedPage: RenderedPage | null,
+  viewerSize: ViewerSize,
+  panOffset: PanOffset,
+): {
+  x: number;
+  y: number;
+} {
+  if (!renderedPage) {
+    return {
+      x: 0,
+      y: 0,
+    };
+  }
+
+  const bounds = getPanBounds(renderedPage, viewerSize);
+
+  return {
+    x: getBaseFrameX(renderedPage.displayWidth, viewerSize.width) + clampPan(panOffset.x, bounds.minX, bounds.maxX),
+    y: clampPan(panOffset.y, bounds.minY, bounds.maxY),
+  };
+}
+
+function getBaseFrameX(frameWidth: number, viewerWidth: number): number {
+  if (!viewerWidth) {
+    return 0;
+  }
+
+  return Math.max((viewerWidth - frameWidth) / 2, 0);
 }
 
 function getRotationTransform(rotation: number, width: number, height: number): string {

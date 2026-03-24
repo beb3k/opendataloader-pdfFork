@@ -583,7 +583,7 @@ select {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
   gap: 0;
-  min-height: clamp(620px, 72vh, 900px);
+  height: clamp(620px, 72vh, 900px);
   border: 1px solid var(--line);
   border-radius: 24px;
   background: var(--surface-soft);
@@ -630,6 +630,7 @@ select {
   display: grid;
   gap: 12px;
   padding: 16px;
+  max-height: clamp(24rem, 52vh, 42rem);
   align-content: start;
   overflow-y: auto;
 }
@@ -729,18 +730,26 @@ select {
 }
 
 .bbox-tab-panel {
-  position: relative;
   min-width: 0;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   background: var(--surface-strong);
 }
 
+.bbox-panel-content {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.bbox-panel-content > * {
+  flex: 1;
+  min-height: 0;
+}
+
 .bbox-copy-button {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 2;
   min-width: 40px;
   min-height: 40px;
   padding: 0;
@@ -750,7 +759,7 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  align-items: flex-start;
+  align-items: center;
   padding: 16px;
   border-bottom: 1px solid var(--line);
   background: var(--surface-soft);
@@ -763,6 +772,41 @@ select {
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+}
+
+.bbox-page-input-shell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.bbox-page-input-label,
+.bbox-page-count {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.bbox-page-input {
+  width: 4.75rem;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 999px;
+  text-align: center;
+}
+
+.bbox-page-input[aria-invalid="true"] {
+  border-color: rgba(180, 35, 24, 0.36);
+}
+
+.bbox-page-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .bbox-page-controls span {
@@ -814,10 +858,11 @@ select {
   grid-template-rows: minmax(0, 1fr) auto;
 }
 
-.bbox-document-stage {
+.bbox-document-stage,
+.bbox-page-panel-shell {
+  width: 100%;
   min-height: 0;
   display: grid;
-  place-items: start center;
   padding: 16px;
   overflow: auto;
   background:
@@ -827,11 +872,32 @@ select {
   background-size: auto, 18px 18px, 18px 18px;
 }
 
+.bbox-document-stage {
+  place-items: start center;
+}
+
+.bbox-page-panel-shell {
+  flex: 1;
+  height: 100%;
+  align-items: stretch;
+  justify-items: center;
+}
+
+.bbox-document-stage.is-hand-tool-on {
+  cursor: grab;
+}
+
+.bbox-document-stage.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
 .bbox-stage-shell {
   position: relative;
   display: grid;
   width: 100%;
   min-height: 100%;
+  overflow: hidden;
 }
 
 .bbox-stage-shell.is-loading {
@@ -839,16 +905,34 @@ select {
 }
 
 .bbox-stage-shell.is-ready {
-  align-content: start;
-  justify-items: center;
+  align-content: stretch;
+  justify-items: stretch;
 }
 
-.shell[data-theme="dark"] .bbox-document-stage {
+.bbox-stage-positioner {
+  position: relative;
+  width: fit-content;
+}
+
+.shell[data-theme="dark"] .bbox-document-stage,
+.shell[data-theme="dark"] .bbox-page-panel-shell {
   background:
     linear-gradient(180deg, rgba(21, 30, 38, 0.92), rgba(17, 24, 29, 0.96)),
     linear-gradient(90deg, rgba(237, 242, 247, 0.04) 1px, transparent 1px),
     linear-gradient(rgba(237, 242, 247, 0.04) 1px, transparent 1px);
   background-size: auto, 18px 18px, 18px 18px;
+}
+
+.bbox-page-panel-card {
+  width: min(100%, 960px);
+  min-height: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 18px 40px rgba(35, 25, 12, 0.16);
+  overflow: hidden;
 }
 
 .bbox-pdf-canvas {
@@ -904,21 +988,25 @@ select {
 
 .bbox-html-panel,
 .bbox-text-panel {
+  flex: 1;
   width: 100%;
   height: 100%;
   border: 0;
 }
 
 .bbox-html-panel {
+  display: block;
   background: white;
 }
 
 .bbox-text-panel {
   margin: 0;
+  min-height: 100%;
   padding: 56px 18px 18px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+  background: white;
   font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
   font-size: 0.9rem;
   line-height: 1.55;
@@ -947,7 +1035,7 @@ select {
 @media (max-width: 1080px) {
   .bbox-viewer-card {
     grid-template-columns: 1fr;
-    min-height: auto;
+    height: auto;
   }
 
   .bbox-rail {
@@ -959,6 +1047,7 @@ select {
   .bbox-page-list {
     grid-auto-flow: column;
     grid-auto-columns: minmax(150px, 180px);
+    max-height: none;
     overflow-x: auto;
     overflow-y: hidden;
   }

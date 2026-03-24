@@ -6,6 +6,7 @@ import BoundingBoxPreview, { type ViewerTab, type ViewerTabDefinition } from "./
 const getDocumentMock = vi.fn();
 const globalWorkerOptions = { workerSrc: "" };
 const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+const originalClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
 const originalDomMatrix = globalThis.DOMMatrix;
 const SAME_CANVAS_ERROR =
   "Cannot use the same canvas during multiple render() operations. Use different canvas or ensure previous operations were cancelled or completed";
@@ -50,6 +51,13 @@ describe("BoundingBoxPreview", () => {
       configurable: true,
       get() {
         return 640;
+      },
+    });
+
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get() {
+        return 480;
       },
     });
 
@@ -102,6 +110,10 @@ describe("BoundingBoxPreview", () => {
       Object.defineProperty(HTMLElement.prototype, "clientWidth", originalClientWidth);
     }
 
+    if (originalClientHeight) {
+      Object.defineProperty(HTMLElement.prototype, "clientHeight", originalClientHeight);
+    }
+
     globalThis.DOMMatrix = originalDomMatrix;
   });
 
@@ -118,7 +130,7 @@ describe("BoundingBoxPreview", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: /go to page 2/i }));
-    expect(await screen.findByText(/page 2 of 3/i)).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: /page number/i })).toHaveValue("2");
   });
 
   it("keeps the thumbnail frame size stable on text tabs", async () => {
@@ -140,14 +152,150 @@ describe("BoundingBoxPreview", () => {
     });
   });
 
+  it("shows page-specific text content on the selected page", async () => {
+    render(
+      <Harness
+        tabs={createTabs({
+          preview: {
+            content: "Whole preview",
+            pageCopies: [
+              { pageNumber: 1, content: "Preview page 1" },
+              { pageNumber: 2, content: "Preview page 2" },
+            ],
+          },
+          markdown: {
+            content: "# Whole markdown",
+            pageCopies: [
+              { pageNumber: 1, content: "# Page 1" },
+              { pageNumber: 2, content: "# Page 2" },
+            ],
+          },
+          json: {
+            content: '{"page":"all"}',
+            pageCopies: [
+              { pageNumber: 1, content: '{"page":1}' },
+              { pageNumber: 2, content: '{"page":2}' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await screen.findByRole("textbox", { name: /page number/i });
+    fireEvent.click(screen.getByRole("button", { name: /go to page 2/i }));
+
+    fireEvent.click(screen.getByRole("tab", { name: /^preview$/i }));
+    expect(await screen.findByText("Preview page 2")).toBeInTheDocument();
+    expect(screen.queryByText("Whole preview")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /^md$/i }));
+    expect(await screen.findByText("# Page 2")).toBeInTheDocument();
+    expect(screen.queryByText("# Whole markdown")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /^json$/i }));
+    expect(await screen.findByText(/"page": 2/i)).toBeInTheDocument();
+    expect(screen.queryByText(/"page": "all"/i)).not.toBeInTheDocument();
+  });
+
+  it("loads page-specific html content for the selected page", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/sample.html/preview?page=2")) {
+        return {
+          ok: true,
+          json: async () => ({
+            kind: "html",
+            content: "<p>HTML page 2</p>",
+          }),
+        } as Response;
+      }
+
+      return createJsonResponse() as Response;
+    }) as unknown as typeof fetch;
+
+    render(
+      <Harness
+        tabs={createTabs({
+          html: {
+            content: "<p>Whole HTML</p>",
+            pagePreviewHref: "/jobs/job-1/files/sample.html/preview",
+          },
+        })}
+      />,
+    );
+
+    await screen.findByRole("textbox", { name: /page number/i });
+    fireEvent.click(screen.getByRole("button", { name: /go to page 2/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /^html$/i }));
+
+    await waitFor(() => {
+      const htmlFrame = document.querySelector(".bbox-html-panel");
+      expect(htmlFrame).toHaveAttribute("srcdoc", "<p>HTML page 2</p>");
+    });
+    expect(document.querySelector(".bbox-page-panel-shell")).not.toBeNull();
+  });
+
+  it("keeps page navigation visible on every page-aware tab", async () => {
+    render(<Harness />);
+
+    const pageInput = await screen.findByRole("textbox", { name: /page number/i });
+    expect(pageInput).toHaveValue("1");
+
+    fireEvent.click(screen.getByRole("tab", { name: /^preview$/i }));
+    expect(screen.getByRole("textbox", { name: /page number/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /^html$/i }));
+    expect(screen.getByRole("textbox", { name: /page number/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /^md$/i }));
+    expect(screen.getByRole("textbox", { name: /page number/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /^json$/i }));
+    expect(screen.getByRole("textbox", { name: /page number/i })).toBeInTheDocument();
+  });
+
+  it("lets the user jump to a page directly and rejects invalid values", async () => {
+    render(
+      <Harness
+        tabs={createTabs({
+          preview: {
+            content: "Whole preview",
+            pageCopies: [
+              { pageNumber: 1, content: "Preview page 1" },
+              { pageNumber: 2, content: "Preview page 2" },
+              { pageNumber: 3, content: "Preview page 3" },
+            ],
+          },
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: /^preview$/i }));
+
+    const pageInput = await screen.findByRole("textbox", { name: /page number/i });
+    fireEvent.change(pageInput, { target: { value: "3" } });
+    fireEvent.keyDown(pageInput, { key: "Enter" });
+
+    expect(await screen.findByText("Preview page 3")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /page number/i })).toHaveValue("3");
+
+    fireEvent.change(pageInput, { target: { value: "9" } });
+    fireEvent.blur(pageInput);
+
+    expect(await screen.findByText(/enter a page from 1 to 3/i)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /page number/i })).toHaveValue("3");
+    expect(screen.getByText("Preview page 3")).toBeInTheDocument();
+  });
+
   it("updates zoom and rotation controls for document tabs", async () => {
     render(<Harness />);
 
-    await screen.findByText(/page 1 of 3/i);
+    await screen.findByRole("textbox", { name: /page number/i });
     await waitFor(() => {
       expect(document.querySelector(".bbox-canvas-frame")).not.toBeNull();
     });
-    const zoomInButton = screen.getByRole("button", { name: /zoom in/i });
+    const zoomInButton = screen.getByRole("button", { name: /^zoom in$/i });
     const rotateClockwiseButton = screen.getByRole("button", { name: /rotate clockwise/i });
 
     fireEvent.click(zoomInButton);
@@ -164,12 +312,91 @@ describe("BoundingBoxPreview", () => {
       const transform = document.querySelector(".bbox-canvas-transform");
       expect(transform?.getAttribute("style")).toContain("rotate(90deg)");
     });
+
+    const thumbTransform = document.querySelector(".bbox-page-thumb-transform");
+    expect(thumbTransform?.getAttribute("style")).toContain("transform: none");
+  });
+
+  it("keeps thumbnails upright when the main page rotates", async () => {
+    render(<Harness />);
+
+    await screen.findByRole("textbox", { name: /page number/i });
+    fireEvent.click(screen.getByRole("button", { name: /rotate clockwise/i }));
+
+    await waitFor(() => {
+      const mainTransform = document.querySelector(".bbox-canvas-transform");
+      const thumbTransform = document.querySelector(".bbox-page-thumb-transform");
+
+      expect(mainTransform?.getAttribute("style")).toContain("rotate(90deg)");
+      expect(thumbTransform?.getAttribute("style")).toContain("transform: none");
+    });
+  });
+
+  it("lets the hand tool pan in both directions without requiring zoom", async () => {
+    render(<Harness />);
+
+    const handToolButton = await screen.findByRole("button", { name: /turn on hand tool/i });
+    expect(handToolButton).toBeEnabled();
+
+    fireEvent.click(handToolButton);
+    expect(screen.getByRole("button", { name: /turn off hand tool/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    const stage = document.querySelector(".bbox-document-stage") as HTMLDivElement;
+    const positioner = document.querySelector(".bbox-stage-positioner") as HTMLDivElement;
+
+    expect(stage).toHaveClass("is-hand-tool-on");
+    expect(positioner).not.toBeNull();
+
+    fireEvent.pointerDown(stage, {
+      button: 0,
+      clientX: 100,
+      clientY: 100,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(stage, {
+      clientX: 160,
+      clientY: 150,
+      pointerId: 1,
+    });
+    fireEvent.pointerUp(stage, {
+      clientX: 160,
+      clientY: 150,
+      pointerId: 1,
+    });
+
+    await waitFor(() => {
+      expect(positioner.getAttribute("style")).toContain("translate(60px, 50px)");
+    });
+
+    fireEvent.pointerDown(stage, {
+      button: 0,
+      clientX: 160,
+      clientY: 150,
+      pointerId: 2,
+    });
+    fireEvent.pointerMove(stage, {
+      clientX: -2000,
+      clientY: -2000,
+      pointerId: 2,
+    });
+    fireEvent.pointerUp(stage, {
+      clientX: -2000,
+      clientY: -2000,
+      pointerId: 2,
+    });
+
+    await waitFor(() => {
+      expect(positioner.getAttribute("style")).toContain("translate(-592px, -912px)");
+    });
   });
 
   it("restores the pdf canvas after leaving annot and returning", async () => {
     render(<Harness />);
 
-    await screen.findByText(/page 1 of 3/i);
+    await screen.findByRole("textbox", { name: /page number/i });
     await waitFor(() => {
       expect(document.querySelector(".bbox-canvas-frame")).not.toBeNull();
       expect(document.querySelectorAll(".bbox-rect")).toHaveLength(1);
@@ -190,7 +417,7 @@ describe("BoundingBoxPreview", () => {
   it("hides the page rail when the toggle is pressed", async () => {
     render(<Harness />);
 
-    await screen.findByText(/page 1 of 3/i);
+    await screen.findByRole("textbox", { name: /page number/i });
     fireEvent.click(screen.getByRole("button", { name: /hide pages/i }));
 
     await waitFor(() => {
@@ -237,7 +464,7 @@ describe("BoundingBoxPreview", () => {
       />,
     );
 
-    await screen.findByText(/page 1 of 3/i);
+    await screen.findByRole("textbox", { name: /page number/i });
     fireEvent.click(screen.getByRole("button", { name: /go to page 2/i }));
     fireEvent.click(screen.getByRole("tab", { name: /^preview$/i }));
     fireEvent.click(screen.getByRole("button", { name: /copy current content/i }));
@@ -273,6 +500,13 @@ describe("BoundingBoxPreview", () => {
     expect(await screen.findByText(/could not load the bounding boxes/i)).toBeInTheDocument();
   });
 
+  it("removes the plain pdf footer text", async () => {
+    render(<Harness initialActiveTab="pdf" />);
+
+    await screen.findByRole("textbox", { name: /page number/i });
+    expect(screen.queryByText(/plain pdf view/i)).not.toBeInTheDocument();
+  });
+
   it("re-enters the document view without a same-canvas error while the first render is still active", async () => {
     mockDocument.numPages = 1;
     renderMode = "guarded";
@@ -290,7 +524,7 @@ describe("BoundingBoxPreview", () => {
     expect(await screen.findByText(/plain text preview/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: /^annot$/i }));
-    expect(await screen.findByText(/page 1 of 1/i)).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: /page number/i })).toHaveValue("1");
     expect(screen.queryByText(SAME_CANVAS_ERROR)).not.toBeInTheDocument();
   });
 
@@ -312,10 +546,12 @@ describe("BoundingBoxPreview", () => {
 
 function Harness({
   tabs = createTabs(),
+  initialActiveTab = "annot",
 }: {
   tabs?: ViewerTabDefinition[];
+  initialActiveTab?: ViewerTab;
 }) {
-  const [activeTab, setActiveTab] = useState<ViewerTab>("annot");
+  const [activeTab, setActiveTab] = useState<ViewerTab>(initialActiveTab);
   const [sourceFile] = useState(() => createPdfFile());
 
   return (
