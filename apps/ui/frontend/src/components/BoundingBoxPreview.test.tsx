@@ -426,6 +426,28 @@ describe("BoundingBoxPreview", () => {
     });
   });
 
+  it("keeps the page rail toggle available on non-document tabs", async () => {
+    render(<Harness />);
+
+    await screen.findByRole("textbox", { name: /page number/i });
+    fireEvent.click(screen.getByRole("tab", { name: /^preview$/i }));
+    expect(await screen.findByText(/plain text preview/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /hide pages/i }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/results viewer/i)).toHaveClass("is-sidebar-collapsed");
+      expect(screen.queryByLabelText(/pdf page thumbnails/i)).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /show pages/i }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/results viewer/i)).not.toHaveClass("is-sidebar-collapsed");
+      expect(screen.getByLabelText(/pdf page thumbnails/i)).toBeInTheDocument();
+    });
+  });
+
   it("shows copy for text tabs and formats json content", async () => {
     render(<Harness />);
 
@@ -472,6 +494,38 @@ describe("BoundingBoxPreview", () => {
     await waitFor(() => {
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith("Page 2 copy");
     });
+  });
+
+  it("shows a copy toast with the current page number", async () => {
+    render(
+      <Harness
+        tabs={createTabs({
+          preview: {
+            content: "Whole preview",
+            pageCopies: [
+              { pageNumber: 1, content: "Preview page 1" },
+              { pageNumber: 2, content: "Preview page 2" },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await screen.findByRole("textbox", { name: /page number/i });
+    fireEvent.click(screen.getByRole("tab", { name: /^preview$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /go to page 2/i }));
+    fireEvent.click(screen.getByRole("button", { name: /copy current content/i }));
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith("Preview page 2");
+    });
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Copied");
+    expect(screen.getByRole("status")).toHaveTextContent("Page 2 copied to clipboard.");
+
+    await waitFor(() => {
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    }, { timeout: 3000 });
   });
 
   it("keeps unavailable tabs visible but disabled", () => {

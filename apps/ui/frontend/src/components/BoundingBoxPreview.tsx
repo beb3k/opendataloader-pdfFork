@@ -123,7 +123,7 @@ export default function BoundingBoxPreview({
   const [panOffset, setPanOffset] = useState<PanOffset>({ x: 0, y: 0 });
   const [isHandToolOn, setIsHandToolOn] = useState(false);
   const [isHandDragging, setIsHandDragging] = useState(false);
-  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [copyToastMessage, setCopyToastMessage] = useState<string | null>(null);
   const [pageInputValue, setPageInputValue] = useState("1");
   const [pageInputError, setPageInputError] = useState<string | null>(null);
   const [pagePanelState, setPagePanelState] = useState<PagePanelState>({
@@ -402,8 +402,22 @@ export default function BoundingBoxPreview({
   }, [renderedPage, viewerSize]);
 
   useEffect(() => {
-    setCopyFeedback(null);
+    setCopyToastMessage(null);
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!copyToastMessage) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setCopyToastMessage(null);
+    }, 2200);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [copyToastMessage]);
 
   useEffect(() => {
     if (!activeDefinition || isDocumentTab) {
@@ -666,11 +680,12 @@ export default function BoundingBoxPreview({
       return;
     }
 
-    await navigator.clipboard.writeText(formatPanelContent(activeDefinition, nextCopyText));
-    setCopyFeedback("Copied");
-    window.setTimeout(() => {
-      setCopyFeedback(null);
-    }, 1600);
+    try {
+      await navigator.clipboard.writeText(formatPanelContent(activeDefinition, nextCopyText));
+      setCopyToastMessage(`Page ${currentPage} copied to clipboard.`);
+    } catch {
+      setCopyToastMessage(null);
+    }
   }
 
   return (
@@ -791,48 +806,51 @@ export default function BoundingBoxPreview({
                 />
               </div>
 
-              {isDocumentTab ? (
-                <div className="bbox-view-controls" role="group" aria-label="Viewer controls">
-                  <SymbolButton
-                    symbol={"\u2630"}
-                    label={isSidebarOpen ? "Hide pages" : "Show pages"}
-                    onClick={() => setIsSidebarOpen((current) => !current)}
-                    disabled={!canUseViewerControls}
-                    pressed={isSidebarOpen}
-                  />
-                  <SymbolButton
-                    symbol={"\u2212"}
-                    label="Zoom out"
-                    onClick={zoomOut}
-                    disabled={!canZoomOut}
-                  />
-                  <SymbolButton
-                    symbol="+"
-                    label="Zoom in"
-                    onClick={zoomIn}
-                    disabled={!canZoomIn}
-                  />
-                  <SymbolButton
-                    symbol={"\u270b"}
-                    label={handToolLabel}
-                    onClick={toggleHandTool}
-                    disabled={!canUseHandTool}
-                    pressed={isHandToolOn}
-                  />
-                  <SymbolButton
-                    symbol={"\u21ba"}
-                    label="Rotate counter clockwise"
-                    onClick={rotateCounterClockwise}
-                    disabled={!canUseViewerControls}
-                  />
-                  <SymbolButton
-                    symbol={"\u21bb"}
-                    label="Rotate clockwise"
-                    onClick={rotateClockwise}
-                    disabled={!canUseViewerControls}
-                  />
-                </div>
-              ) : null}
+              <div className="bbox-view-controls" role="group" aria-label="Viewer controls">
+                <SymbolButton
+                  symbol={"\u2630"}
+                  label={isSidebarOpen ? "Hide pages" : "Show pages"}
+                  onClick={() => setIsSidebarOpen((current) => !current)}
+                  disabled={!canUseViewerControls}
+                  pressed={isSidebarOpen}
+                />
+
+                {isDocumentTab ? (
+                  <>
+                    <SymbolButton
+                      symbol={"\u2212"}
+                      label="Zoom out"
+                      onClick={zoomOut}
+                      disabled={!canZoomOut}
+                    />
+                    <SymbolButton
+                      symbol="+"
+                      label="Zoom in"
+                      onClick={zoomIn}
+                      disabled={!canZoomIn}
+                    />
+                    <SymbolButton
+                      symbol={"\u270b"}
+                      label={handToolLabel}
+                      onClick={toggleHandTool}
+                      disabled={!canUseHandTool}
+                      pressed={isHandToolOn}
+                    />
+                    <SymbolButton
+                      symbol={"\u21ba"}
+                      label="Rotate counter clockwise"
+                      onClick={rotateCounterClockwise}
+                      disabled={!canUseViewerControls}
+                    />
+                    <SymbolButton
+                      symbol={"\u21bb"}
+                      label="Rotate clockwise"
+                      onClick={rotateClockwise}
+                      disabled={!canUseViewerControls}
+                    />
+                  </>
+                ) : null}
+              </div>
 
               {canCopy ? (
                 <button
@@ -841,8 +859,8 @@ export default function BoundingBoxPreview({
                   onClick={() => {
                     void copyCurrentPanel();
                   }}
-                  aria-label={copyFeedback ?? "Copy current content"}
-                  title={copyFeedback ?? "Copy current content"}
+                  aria-label="Copy current content"
+                  title="Copy current content"
                 >
                   {"\u29c9"}
                 </button>
@@ -985,7 +1003,20 @@ export default function BoundingBoxPreview({
           </div>
         </div>
       </div>
+
+      {copyToastMessage ? <CopyToast message={copyToastMessage} /> : null}
     </section>
+  );
+}
+
+function CopyToast({ message }: { message: string }) {
+  return (
+    <div className="bbox-toast-shell" role="status" aria-live="polite">
+      <div className="bbox-toast">
+        <strong>Copied</strong>
+        <p>{message}</p>
+      </div>
+    </div>
   );
 }
 

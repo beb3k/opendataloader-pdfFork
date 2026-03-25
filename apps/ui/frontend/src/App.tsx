@@ -228,12 +228,8 @@ export default function App({ api = createBrowserApi(), storage, initialJob }: A
     setAdvancedOpen(false);
   }
 
-  function showLightTheme() {
-    setIsDarkTheme(false);
-  }
-
-  function showDarkTheme() {
-    setIsDarkTheme(true);
+  function toggleTheme() {
+    setIsDarkTheme((current) => !current);
   }
 
   const showOptionsCard = Boolean(selectedFile);
@@ -261,7 +257,7 @@ export default function App({ api = createBrowserApi(), storage, initialJob }: A
             <button
               type="button"
               className={`theme-toggle-button ${!isDarkTheme ? "is-active" : ""}`}
-              onClick={showLightTheme}
+              onClick={toggleTheme}
               aria-pressed={!isDarkTheme}
               aria-label="Light theme"
               title="Light theme"
@@ -271,7 +267,7 @@ export default function App({ api = createBrowserApi(), storage, initialJob }: A
             <button
               type="button"
               className={`theme-toggle-button ${isDarkTheme ? "is-active" : ""}`}
-              onClick={showDarkTheme}
+              onClick={toggleTheme}
               aria-pressed={isDarkTheme}
               aria-label="Dark theme"
               title="Dark theme"

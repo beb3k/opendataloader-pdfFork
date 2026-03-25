@@ -254,6 +254,12 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /dark theme/i }));
     expect(document.querySelector(".shell")).toHaveAttribute("data-theme", "dark");
 
+    fireEvent.click(screen.getByRole("button", { name: /dark theme/i }));
+    expect(document.querySelector(".shell")).toHaveAttribute("data-theme", "light");
+
+    fireEvent.click(screen.getByRole("button", { name: /light theme/i }));
+    expect(document.querySelector(".shell")).toHaveAttribute("data-theme", "dark");
+
     view.unmount();
     render(<App api={createApi()} storage={storage} />);
     expect(document.querySelector(".shell")).toHaveAttribute("data-theme", "dark");
