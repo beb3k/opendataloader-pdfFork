@@ -1,0 +1,22 @@
+# Build outputs and package caches
+**/target/**
+**/build/**
+**/dist/**
+**/node_modules/**
+**/.next/**
+**/.turbo/**
+**/.cache/**
+
+# Python caches and virtual environments
+**/__pycache__/**
+**/.mypy_cache/**
+**/.pytest_cache/**
+**/.venv/**
+**/*.egg-info/**
+
+# Benchmark outputs and generated experiment artifacts
+tests/benchmark/prediction/**
+docs/hybrid/experiments/**
+
+# Large generated API snapshots
+docs/hybrid/research/*.json

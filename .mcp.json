@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "code-review-graph": {
+      "type": "stdio",
+      "command": "C:\\Users\\Satrio Faiz\\Downloads\\github-repos\\opendataloader-pdfFork\\scripts\\code-review-graph-mcp.cmd",
+      "args": [
+        "serve"
+      ],
+      "env": {}
+    }
+  }
+}
