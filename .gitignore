@@ -68,6 +68,11 @@ logs/
 # Temporary / Generated
 **/tmp/
 **/temp/
+**/.pytest-temp-*/
+**/.pytest-tmp*/
+**/pytest-cache-files-*/
+.codex-worktrees/
+.deps/
 
 # Configuration files
 .claude/settings.local.json
