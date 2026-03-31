@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from .models import JobResponse
+from .models import JobResponse, PreviewPayload
 from .service import ActiveJobError, InvalidJobRequestError, JobNotFoundError, JobService, parse_options
 
 
@@ -49,6 +49,15 @@ def create_app(service: JobService | None = None) -> FastAPI:
     def get_job(job_id: str) -> JobResponse:
         try:
             return job_service.get_job_response(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/jobs/{job_id}/files/{name:path}/preview", response_model=PreviewPayload)
+    def preview_file(job_id: str, name: str, page: int = Query(..., ge=1)) -> PreviewPayload:
+        try:
+            return job_service.build_page_preview(job_id, name, page)
+        except InvalidJobRequestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

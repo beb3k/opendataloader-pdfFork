@@ -18,6 +18,7 @@ vi.mock("./components/BoundingBoxPreview", () => ({
       label: string;
       enabled: boolean;
       pageCopies?: Array<{ pageNumber: number; content: string }>;
+      pagePreviewHref?: string | null;
     }>;
   }) => (
     <div data-testid="bbox-preview">
@@ -37,6 +38,12 @@ vi.mock("./components/BoundingBoxPreview", () => ({
                 ?.map((page) => `${page.pageNumber}:${page.content}`)
                 .join("|")}`,
           )
+          .join("||")}
+      </div>
+      <div data-testid="viewer-page-preview-hrefs">
+        {tabs
+          .filter((tab) => tab.pagePreviewHref)
+          .map((tab) => `${tab.id}:${tab.pagePreviewHref}`)
           .join("||")}
       </div>
     </div>
@@ -326,6 +333,18 @@ describe("App", () => {
       sourceName: "sample.pdf",
       files: [
         {
+          name: "sample.txt",
+          kind: "text",
+          preview: {
+            kind: "text",
+            content: "All pages",
+            pages: [
+              { pageNumber: 1, content: "Preview page 1" },
+              { pageNumber: 2, content: "Preview page 2" },
+            ],
+          },
+        },
+        {
           name: "sample.md",
           kind: "markdown",
           preview: {
@@ -335,6 +354,23 @@ describe("App", () => {
               { pageNumber: 1, content: "Page 1 copy" },
               { pageNumber: 2, content: "Page 2 copy" },
             ],
+          },
+        },
+        {
+          name: "sample.html",
+          kind: "html",
+          preview: {
+            kind: "html",
+            content: "<p>All pages</p>",
+          },
+        },
+        {
+          name: "sample.json",
+          kind: "json",
+          preview: {
+            kind: "json",
+            content: '{"pages":"all"}',
+            pages: [{ pageNumber: 2, content: '{"page":2}' }],
           },
         },
       ],
@@ -349,7 +385,10 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /create job/i }));
 
     expect(await screen.findByTestId("viewer-page-copies")).toHaveTextContent(
-      "markdown:1:Page 1 copy|2:Page 2 copy",
+      "preview:1:Preview page 1|2:Preview page 2||markdown:1:Page 1 copy|2:Page 2 copy||json:2:{\"page\":2}",
+    );
+    expect(screen.getByTestId("viewer-page-preview-hrefs")).toHaveTextContent(
+      "preview:/jobs/job-7/files/sample.txt/preview||html:/jobs/job-7/files/sample.html/preview||markdown:/jobs/job-7/files/sample.md/preview||json:/jobs/job-7/files/sample.json/preview",
     );
   });
 
