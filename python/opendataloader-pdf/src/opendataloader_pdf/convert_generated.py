@@ -30,11 +30,13 @@ def convert(
     image_dir: Optional[str] = None,
     pages: Optional[str] = None,
     include_header_footer: bool = False,
+    detect_strikethrough: bool = False,
     hybrid: Optional[str] = None,
     hybrid_mode: Optional[str] = None,
     hybrid_url: Optional[str] = None,
     hybrid_timeout: Optional[str] = None,
     hybrid_fallback: bool = False,
+    to_stdout: bool = False,
 ) -> None:
     """
     Convert PDF(s) into the requested output format(s).
@@ -60,11 +62,13 @@ def convert(
         image_dir: Directory for extracted images
         pages: Pages to extract (e.g., "1,3,5-7"). Default: all pages
         include_header_footer: Include page headers and footers in output
-        hybrid: Hybrid backend for AI processing. Values: off (default), docling-fast
+        detect_strikethrough: Detect strikethrough text and wrap with ~~ in Markdown output (experimental)
+        hybrid: Hybrid backend (requires a running server). Quick start: pip install "opendataloader-pdf[hybrid]" && opendataloader-pdf-hybrid --port 5002. For remote servers use --hybrid-url. Values: off (default), docling-fast
         hybrid_mode: Hybrid triage mode. Values: auto (default, dynamic triage), full (skip triage, all pages to backend)
         hybrid_url: Hybrid backend server URL (overrides default)
-        hybrid_timeout: Hybrid backend request timeout in milliseconds. Default: 30000
+        hybrid_timeout: Hybrid backend request timeout in milliseconds (0 = no timeout). Default: 0
         hybrid_fallback: Opt in to Java fallback on hybrid backend error (default: disabled)
+        to_stdout: Write output to stdout instead of file (single format only)
     """
     args: List[str] = []
 
@@ -120,6 +124,8 @@ def convert(
         args.extend(["--pages", pages])
     if include_header_footer:
         args.append("--include-header-footer")
+    if detect_strikethrough:
+        args.append("--detect-strikethrough")
     if hybrid:
         args.extend(["--hybrid", hybrid])
     if hybrid_mode:
@@ -130,5 +136,7 @@ def convert(
         args.extend(["--hybrid-timeout", hybrid_timeout])
     if hybrid_fallback:
         args.append("--hybrid-fallback")
+    if to_stdout:
+        args.append("--to-stdout")
 
     run_jar(args, quiet)

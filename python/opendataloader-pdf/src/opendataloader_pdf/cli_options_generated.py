@@ -181,13 +181,22 @@ CLI_OPTIONS: List[Dict[str, Any]] = [
         "description": "Include page headers and footers in output",
     },
     {
+        "name": "detect-strikethrough",
+        "python_name": "detect_strikethrough",
+        "short_name": None,
+        "type": "boolean",
+        "required": False,
+        "default": False,
+        "description": "Detect strikethrough text and wrap with ~~ in Markdown output (experimental)",
+    },
+    {
         "name": "hybrid",
         "python_name": "hybrid",
         "short_name": None,
         "type": "string",
         "required": False,
         "default": "off",
-        "description": "Hybrid backend for AI processing. Values: off (default), docling-fast",
+        "description": "Hybrid backend (requires a running server). Quick start: pip install \"opendataloader-pdf[hybrid]\" && opendataloader-pdf-hybrid --port 5002. For remote servers use --hybrid-url. Values: off (default), docling-fast",
     },
     {
         "name": "hybrid-mode",
@@ -213,8 +222,8 @@ CLI_OPTIONS: List[Dict[str, Any]] = [
         "short_name": None,
         "type": "string",
         "required": False,
-        "default": "30000",
-        "description": "Hybrid backend request timeout in milliseconds. Default: 30000",
+        "default": "0",
+        "description": "Hybrid backend request timeout in milliseconds (0 = no timeout). Default: 0",
     },
     {
         "name": "hybrid-fallback",
@@ -224,6 +233,15 @@ CLI_OPTIONS: List[Dict[str, Any]] = [
         "required": False,
         "default": False,
         "description": "Opt in to Java fallback on hybrid backend error (default: disabled)",
+    },
+    {
+        "name": "to-stdout",
+        "python_name": "to_stdout",
+        "short_name": None,
+        "type": "boolean",
+        "required": False,
+        "default": False,
+        "description": "Write output to stdout instead of file (single format only)",
     },
 ]
 

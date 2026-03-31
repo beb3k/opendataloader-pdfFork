@@ -106,6 +106,11 @@ public class HybridDocumentProcessor {
         int totalPages = StaticContainers.getDocument().getNumberOfPages();
         LOGGER.log(Level.INFO, "Starting hybrid processing for {0} pages", totalPages);
 
+        if (pagesToProcess != null && pagesToProcess.isEmpty()) {
+            LOGGER.log(Level.INFO, "Skipping hybrid processing because no valid pages were selected");
+            return createEmptyContents(totalPages);
+        }
+
         // Phase 0: Check backend availability before any processing.
         // Runs before triage intentionally — if the user explicitly requested hybrid mode,
         // they expect the server to be available regardless of how pages would be routed.
@@ -201,6 +206,14 @@ public class HybridDocumentProcessor {
         return contents;
     }
 
+    private static List<List<IObject>> createEmptyContents(int totalPages) {
+        List<List<IObject>> contents = new ArrayList<>(totalPages);
+        for (int i = 0; i < totalPages; i++) {
+            contents.add(new ArrayList<>());
+        }
+        return contents;
+    }
+
     /**
      * Filters all pages using ContentFilterProcessor.
      */
@@ -279,6 +292,9 @@ public class HybridDocumentProcessor {
             try {
                 List<IObject> pageContents = workingContents.get(pageNumber);
                 pageContents = TableBorderProcessor.processTableBorders(pageContents, pageNumber);
+                if (config.isDetectStrikethrough()) {
+                    StrikethroughProcessor.processStrikethroughs(pageContents);
+                }
                 pageContents = pageContents.stream()
                     .filter(x -> !(x instanceof LineChunk))
                     .collect(Collectors.toList());

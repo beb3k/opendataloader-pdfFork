@@ -43,16 +43,20 @@ export interface ConvertOptions {
   pages?: string;
   /** Include page headers and footers in output */
   includeHeaderFooter?: boolean;
-  /** Hybrid backend for AI processing. Values: off (default), docling-fast */
+  /** Detect strikethrough text and wrap with ~~ in Markdown output (experimental) */
+  detectStrikethrough?: boolean;
+  /** Hybrid backend (requires a running server). Quick start: pip install "opendataloader-pdf[hybrid]" && opendataloader-pdf-hybrid --port 5002. For remote servers use --hybrid-url. Values: off (default), docling-fast */
   hybrid?: string;
   /** Hybrid triage mode. Values: auto (default, dynamic triage), full (skip triage, all pages to backend) */
   hybridMode?: string;
   /** Hybrid backend server URL (overrides default) */
   hybridUrl?: string;
-  /** Hybrid backend request timeout in milliseconds. Default: 30000 */
+  /** Hybrid backend request timeout in milliseconds (0 = no timeout). Default: 0 */
   hybridTimeout?: string;
   /** Opt in to Java fallback on hybrid backend error (default: disabled) */
   hybridFallback?: boolean;
+  /** Write output to stdout instead of file (single format only) */
+  toStdout?: boolean;
 }
 
 /**
@@ -78,11 +82,13 @@ export interface CliOptions {
   imageDir?: string;
   pages?: string;
   includeHeaderFooter?: boolean;
+  detectStrikethrough?: boolean;
   hybrid?: string;
   hybridMode?: string;
   hybridUrl?: string;
   hybridTimeout?: string;
   hybridFallback?: boolean;
+  toStdout?: boolean;
 }
 
 /**
@@ -148,6 +154,9 @@ export function buildConvertOptions(cliOptions: CliOptions): ConvertOptions {
   if (cliOptions.includeHeaderFooter) {
     convertOptions.includeHeaderFooter = true;
   }
+  if (cliOptions.detectStrikethrough) {
+    convertOptions.detectStrikethrough = true;
+  }
   if (cliOptions.hybrid) {
     convertOptions.hybrid = cliOptions.hybrid;
   }
@@ -162,6 +171,9 @@ export function buildConvertOptions(cliOptions: CliOptions): ConvertOptions {
   }
   if (cliOptions.hybridFallback) {
     convertOptions.hybridFallback = true;
+  }
+  if (cliOptions.toStdout) {
+    convertOptions.toStdout = true;
   }
 
   return convertOptions;
@@ -242,6 +254,9 @@ export function buildArgs(options: ConvertOptions): string[] {
   if (options.includeHeaderFooter) {
     args.push('--include-header-footer');
   }
+  if (options.detectStrikethrough) {
+    args.push('--detect-strikethrough');
+  }
   if (options.hybrid) {
     args.push('--hybrid', options.hybrid);
   }
@@ -256,6 +271,9 @@ export function buildArgs(options: ConvertOptions): string[] {
   }
   if (options.hybridFallback) {
     args.push('--hybrid-fallback');
+  }
+  if (options.toStdout) {
+    args.push('--to-stdout');
   }
 
   return args;

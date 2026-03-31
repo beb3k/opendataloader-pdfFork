@@ -8,6 +8,7 @@ A lightweight FastAPI server optimized for hybrid PDF processing:
 Usage:
     opendataloader-pdf-hybrid [--port PORT] [--host HOST] [--ocr-lang LANG] [--force-ocr]
                               [--enrich-formula] [--enrich-picture-description]
+                              [--max-file-size MB]
 
     # Default: http://localhost:5002
     opendataloader-pdf-hybrid
@@ -43,10 +44,13 @@ Requirements:
 """
 
 import argparse
+import asyncio
 import logging
 import os
 import re
+import sys
 import tempfile
+import threading
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -61,10 +65,25 @@ logger = logging.getLogger(__name__)
 # Configuration
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 5002
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB max file size
+MAX_FILE_SIZE = 0  # No file size limit by default (0 = unlimited)
+UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB chunks for streaming upload
+
+
+def _non_negative_int(value: str) -> int:
+    """Argparse type validator that rejects negative integers."""
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("--max-file-size must be >= 0")
+    return parsed
+
 
 # Global converter instance (initialized on startup with CLI options)
 converter = None
+
+# Serialize converter.convert() calls. The converter singleton was designed for
+# sequential use; this lock keeps that guarantee while allowing the event loop
+# to stay responsive via asyncio.to_thread().
+_convert_lock = threading.Lock()
 
 # Regex matching lone surrogates (U+D800..U+DFFF) and null characters
 _INVALID_UNICODE_RE = re.compile(r"[\ud800-\udfff\x00]")
@@ -163,6 +182,17 @@ def sanitize_unicode(data: Any) -> Any:
     return data
 
 
+def _get_loop_setting() -> str:
+    """Return the uvicorn event loop setting appropriate for the current platform.
+
+    uvloop is not supported on Windows, so we force 'asyncio' there.
+    On other platforms, 'auto' lets uvicorn use uvloop if available.
+    """
+    if sys.platform == "win32":
+        return "asyncio"
+    return "auto"
+
+
 def _check_dependencies():
     """Check if hybrid dependencies are installed."""
     missing = []
@@ -258,6 +288,7 @@ def create_app(
     enrich_formula: bool = False,
     enrich_picture_description: bool = False,
     picture_description_prompt: str | None = None,
+    max_file_size: int = MAX_FILE_SIZE,
 ):
     """Create and configure the FastAPI application.
 
@@ -267,6 +298,7 @@ def create_app(
         enrich_formula: If True, enable formula enrichment (LaTeX extraction).
         enrich_picture_description: If True, enable picture description (alt text generation).
         picture_description_prompt: Custom prompt for picture description.
+        max_file_size: Maximum file size in bytes. 0 means no limit (default).
     """
     from fastapi import FastAPI, File, Form, UploadFile
     from fastapi.responses import JSONResponse
@@ -348,30 +380,39 @@ def create_app(
             except ValueError:
                 pass
 
-        # Read and validate file size
-        content = await files.read()
-        if len(content) > MAX_FILE_SIZE:
-            return JSONResponse(
-                {
-                    "status": "failure",
-                    "errors": [f"File size exceeds maximum allowed ({MAX_FILE_SIZE // (1024*1024)}MB)"],
-                },
-                status_code=413,
-            )
-
-        # Save uploaded file to temp location
+        # Stream upload to temp file and enforce size incrementally
         tmp_path = None
+        total_size = 0
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(content)
             tmp_path = tmp.name
+            while True:
+                chunk = await files.read(UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if max_file_size > 0 and total_size > max_file_size:
+                    tmp.close()
+                    os.unlink(tmp_path)
+                    return JSONResponse(
+                        {
+                            "status": "failure",
+                            "errors": [f"File size exceeds maximum allowed ({max_file_size // (1024*1024)}MB)"],
+                        },
+                        status_code=413,
+                    )
+                tmp.write(chunk)
 
         try:
-            start = time.perf_counter()
-            if page_range_tuple:
-                result = converter.convert(tmp_path, page_range=page_range_tuple)
-            else:
-                result = converter.convert(tmp_path)
-            processing_time = time.perf_counter() - start
+            def _do_convert():
+                with _convert_lock:
+                    t0 = time.perf_counter()
+                    if page_range_tuple:
+                        res = converter.convert(tmp_path, page_range=page_range_tuple)
+                    else:
+                        res = converter.convert(tmp_path)
+                    return res, time.perf_counter() - t0
+
+            result, processing_time = await asyncio.to_thread(_do_convert)
 
             # Export to JSON (DoclingDocument format)
             json_content = result.document.export_to_dict()
@@ -484,6 +525,12 @@ def main():
         default=None,
         help="Custom prompt for picture description. If not set, uses default prompt optimized for charts and images.",
     )
+    parser.add_argument(
+        "--max-file-size",
+        type=_non_negative_int,
+        default=MAX_FILE_SIZE,
+        help="Maximum upload file size in MB. 0 means no limit (default: 0).",
+    )
     args = parser.parse_args()
 
     # Parse ocr_lang
@@ -510,8 +557,15 @@ def main():
     except ImportError:
         logger.info("No GPU detected, using CPU. (PyTorch not installed)")
 
+    # Convert MB to bytes (0 stays 0 = unlimited)
+    max_file_size_bytes = args.max_file_size * 1024 * 1024 if args.max_file_size > 0 else 0
+
     logger.info(f"Starting Docling Fast Server on http://{args.host}:{args.port}")
     logger.info(f"OCR settings: force_ocr={args.force_ocr}, lang={ocr_lang or 'default'}")
+    if max_file_size_bytes > 0:
+        logger.info(f"Max file size: {args.max_file_size}MB")
+    else:
+        logger.info("Max file size: unlimited")
     if enrichments:
         logger.info(f"Enrichments enabled: {', '.join(enrichments)}")
 
@@ -521,12 +575,14 @@ def main():
         enrich_formula=args.enrich_formula,
         enrich_picture_description=args.enrich_picture_description,
         picture_description_prompt=args.picture_description_prompt,
+        max_file_size=max_file_size_bytes,
     )
     uvicorn.run(
         app,
         host=args.host,
         port=args.port,
         log_level=args.log_level,
+        loop=_get_loop_setting(),
     )
 
 

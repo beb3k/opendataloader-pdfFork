@@ -153,12 +153,20 @@
       "description": "Include page headers and footers in output"
     },
     {
+      "name": "detect-strikethrough",
+      "shortName": null,
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Detect strikethrough text and wrap with ~~ in Markdown output (experimental)"
+    },
+    {
       "name": "hybrid",
       "shortName": null,
       "type": "string",
       "required": false,
       "default": "off",
-      "description": "Hybrid backend for AI processing. Values: off (default), docling-fast"
+      "description": "Hybrid backend (requires a running server). Quick start: pip install \"opendataloader-pdf[hybrid]\" && opendataloader-pdf-hybrid --port 5002. For remote servers use --hybrid-url. Values: off (default), docling-fast"
     },
     {
       "name": "hybrid-mode",
@@ -181,8 +189,8 @@
       "shortName": null,
       "type": "string",
       "required": false,
-      "default": "30000",
-      "description": "Hybrid backend request timeout in milliseconds. Default: 30000"
+      "default": "0",
+      "description": "Hybrid backend request timeout in milliseconds (0 = no timeout). Default: 0"
     },
     {
       "name": "hybrid-fallback",
@@ -191,6 +199,14 @@
       "required": false,
       "default": false,
       "description": "Opt in to Java fallback on hybrid backend error (default: disabled)"
+    },
+    {
+      "name": "to-stdout",
+      "shortName": null,
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Write output to stdout instead of file (single format only)"
     }
   ]
 }

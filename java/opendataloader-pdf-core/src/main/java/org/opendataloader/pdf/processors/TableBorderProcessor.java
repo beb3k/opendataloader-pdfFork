@@ -28,8 +28,10 @@ import org.verapdf.wcag.algorithms.semanticalgorithms.utils.ChunksMergeUtils;
 import org.verapdf.wcag.algorithms.semanticalgorithms.utils.NodeUtils;
 
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class TableBorderProcessor {
@@ -66,7 +68,7 @@ public class TableBorderProcessor {
             currentDepth.set(depth + 1);
 
             List<IObject> newContents = new ArrayList<>();
-            Set<TableBorder> processedTableBorders = new HashSet<>();
+            Set<TableBorder> processedTableBorders = new LinkedHashSet<>();
             for (IObject content : contents) {
                 TableBorder tableBorder = addContentToTableBorder(content);
                 if (tableBorder != null) {
@@ -89,9 +91,20 @@ public class TableBorderProcessor {
                     newContents.add(content);
                 }
             }
+            Map<TableBorder, TableBorder> normalizedTables = new HashMap<>();
             for (TableBorder border : processedTableBorders) {
                 StaticContainers.getTableBordersCollection().removeTableBorder(border, pageNumber);
-                processTableBorder(border, pageNumber);
+                TableBorder normalizedTable = normalizeAndProcessTableBorder(contents, border, pageNumber);
+                normalizedTables.put(border, normalizedTable);
+                // Remove the outer table while processing its contents, then restore the page index
+                // with the final instance so later lookups still see the normalized table.
+                StaticContainers.getTableBordersCollection().getTableBorders(pageNumber).add(normalizedTable);
+            }
+            for (int index = 0; index < newContents.size(); index++) {
+                IObject content = newContents.get(index);
+                if (content instanceof TableBorder && normalizedTables.containsKey(content)) {
+                    newContents.set(index, normalizedTables.get(content));
+                }
             }
             return newContents;
         } finally {
@@ -146,6 +159,16 @@ public class TableBorderProcessor {
     }
 
     public static void processTableBorder(TableBorder tableBorder, int pageNumber) {
+        processTableBorderContents(tableBorder, pageNumber);
+    }
+
+    static TableBorder normalizeAndProcessTableBorder(List<IObject> rawPageContents, TableBorder tableBorder, int pageNumber) {
+        TableBorder normalizedTable = TableStructureNormalizer.normalize(rawPageContents, tableBorder);
+        processTableBorderContents(normalizedTable, pageNumber);
+        return normalizedTable;
+    }
+
+    private static void processTableBorderContents(TableBorder tableBorder, int pageNumber) {
         for (int rowNumber = 0; rowNumber < tableBorder.getNumberOfRows(); rowNumber++) {
             TableBorderRow row = tableBorder.getRow(rowNumber);
             for (int colNumber = 0; colNumber < tableBorder.getNumberOfColumns(); colNumber++) {
@@ -213,12 +236,12 @@ public class TableBorderProcessor {
         currentTable.setPreviousTable(previousTable);
     }
 
-    private static TextChunk getTextChunkPartForTableCell(TextChunk textChunk, TableBorderCell cell) {
-        Integer start = textChunk.getSymbolStartIndexByCoordinate(cell.getLeftX());
+    static TextChunk getTextChunkPartForRange(TextChunk textChunk, double leftX, double rightX) {
+        Integer start = textChunk.getSymbolStartIndexByCoordinate(leftX);
         if (start == null) {
             return null;
         }
-        Integer end = textChunk.getSymbolEndIndexByCoordinate(cell.getRightX());
+        Integer end = textChunk.getSymbolEndIndexByCoordinate(rightX);
         if (end == null) {
             return null;
         }
@@ -227,6 +250,10 @@ public class TableBorderProcessor {
         }
         TextChunk result = TextChunk.getTextChunk(textChunk, start, end);
         return ChunksMergeUtils.getTrimTextChunk(result);
+    }
+
+    private static TextChunk getTextChunkPartForTableCell(TextChunk textChunk, TableBorderCell cell) {
+        return getTextChunkPartForRange(textChunk, cell.getLeftX(), cell.getRightX());
     }
 
     public static TextChunk getTextChunkPartBeforeTable(TextChunk textChunk, TableBorder table) {

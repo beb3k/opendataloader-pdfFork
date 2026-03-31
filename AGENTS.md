@@ -10,7 +10,7 @@ Read this file first. It is the repo entry point for agents and reviewers.
 - Generated Python wrapper and hybrid server in `python/opendataloader-pdf`
 - Local browser UI in `apps/ui`
 - Release-facing docs in `content/docs`
-- Benchmark harness in `tests/benchmark`
+- Benchmark workflow via `scripts/bench.sh` using the external `opendataloader-bench` repo
 
 ## Architecture
 
@@ -32,7 +32,7 @@ Read this file first. It is the repo entry point for agents and reviewers.
 - `npm run check:harness` runs the repo boundary and doc-link checks.
 - `./scripts/build-all.sh` runs the release-style Java, Python, and Node build flow.
 - `./scripts/test-java.sh`, `./scripts/test-python.sh`, and `./scripts/test-node.sh` run stack-specific local tests.
-- `cd tests/benchmark && uv run python run.py --check-regression` runs the benchmark gate.
+- `./scripts/bench.sh --check-regression` runs the benchmark gate.
 - `python apps/ui/scripts/run_dev.py` starts the local UI.
 
 ## Observability
@@ -51,4 +51,4 @@ Read this file first. It is the repo entry point for agents and reviewers.
 | Node wrapper | `node/opendataloader-pdf/src` |
 | Local browser workflow | `apps/ui/backend/app` and `apps/ui/frontend/src` |
 | Public docs or website content | `content/docs` |
-| Accuracy or regression checks | `tests/benchmark` |
+| Accuracy or regression checks | `scripts/bench.sh` and `opendataloader-bench` |

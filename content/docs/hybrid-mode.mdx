@@ -13,9 +13,9 @@ Hybrid mode combines the speed of local Java processing with the accuracy of AI 
 | Metric | Java-only | Hybrid | Improvement |
 |:-------|:----------|:-------|:------------|
 | Table accuracy (TEDS) | 0.49 | **0.93** | +90% |
-| Heading accuracy (MHS) | 0.76 | **0.83** | +9% |
+| Heading accuracy (MHS) | 0.74 | **0.81** | +9% |
 | Reading order (NID) | 0.91 | **0.94** | +3% |
-| Speed | 0.05s/doc | 0.43s/doc | 9x slower |
+| Speed | 0.05s/doc | 0.46s/doc | 9x slower |
 
 ## Installation
 
@@ -105,8 +105,8 @@ The triage processor uses a **conservative strategy**: it routes uncertain pages
 |:-------|:-----|:--------|:------------|
 | `hybrid` | string | `"off"` | Backend name: `off`, `docling-fast` |
 | `hybrid_url` | string | auto | Backend server URL |
-| `hybrid_timeout` | int | 30000 | Request timeout in milliseconds |
-| `hybrid_fallback` | bool | true | Fallback to Java on backend error |
+| `hybrid_timeout` | str | `"0"` | Request timeout in milliseconds (0 = no timeout) |
+| `hybrid_fallback` | bool | false | Fallback to Java on backend error |
 
 ### Python Options
 
@@ -117,8 +117,8 @@ opendataloader_pdf.convert(
     output_dir="output/",
     hybrid="docling-fast",
     hybrid_url="http://localhost:5002",  # Custom backend URL
-    hybrid_timeout=60000,                 # 60 second timeout
-    hybrid_fallback=True                  # Fallback to Java on error
+    hybrid_timeout="60000",               # 60 second timeout
+    hybrid_fallback=True                  # Opt in to Java fallback on error
 )
 ```
 
@@ -216,7 +216,7 @@ Start the backend server with `--force-ocr` before running the Python conversion
 
 > **Note**: Standard digital PDFs do not need `--force-ocr`. Use it only for scanned or image-based PDFs where text cannot be selected.
 
-> **Timeout**: OCR is CPU-intensive. For large scanned documents, increase the timeout (default is 30s per batch):
+> **Timeout**: OCR is CPU-intensive. By default there is no timeout, but you can set one explicitly:
 > ```bash
 > # Batch all files in one call — each invocation spawns a JVM process, so repeated calls are slow
 > opendataloader-pdf --hybrid docling-fast --hybrid-timeout 120000 file1.pdf file2.pdf folder/

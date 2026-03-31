@@ -110,9 +110,15 @@ public class CLIOptions {
     private static final String INCLUDE_HEADER_FOOTER_LONG_OPTION = "include-header-footer";
     private static final String INCLUDE_HEADER_FOOTER_DESC = "Include page headers and footers in output";
 
+    // ===== Detect Strikethrough =====
+    private static final String DETECT_STRIKETHROUGH_LONG_OPTION = "detect-strikethrough";
+    private static final String DETECT_STRIKETHROUGH_DESC = "Detect strikethrough text and wrap with ~~ in Markdown output (experimental)";
+
     // ===== Hybrid Mode =====
     private static final String HYBRID_LONG_OPTION = "hybrid";
-    private static final String HYBRID_DESC = "Hybrid backend for AI processing. Values: off (default), docling-fast";
+    private static final String HYBRID_DESC = "Hybrid backend (requires a running server). "
+            + "Quick start: pip install \"opendataloader-pdf[hybrid]\" && opendataloader-pdf-hybrid --port 5002. "
+            + "For remote servers use --hybrid-url. Values: off (default), docling-fast";
 
     private static final String HYBRID_MODE_LONG_OPTION = "hybrid-mode";
     private static final String HYBRID_MODE_DESC = "Hybrid triage mode. Values: auto (default, dynamic triage), full (skip triage, all pages to backend)";
@@ -125,10 +131,14 @@ public class CLIOptions {
     private static final String HYBRID_URL_DESC = "Hybrid backend server URL (overrides default)";
 
     private static final String HYBRID_TIMEOUT_LONG_OPTION = "hybrid-timeout";
-    private static final String HYBRID_TIMEOUT_DESC = "Hybrid backend request timeout in milliseconds. Default: 30000";
+    private static final String HYBRID_TIMEOUT_DESC = "Hybrid backend request timeout in milliseconds (0 = no timeout). Default: 0";
 
     private static final String HYBRID_FALLBACK_LONG_OPTION = "hybrid-fallback";
     private static final String HYBRID_FALLBACK_DESC = "Opt in to Java fallback on hybrid backend error (default: disabled)";
+
+    // ===== Stdout Output =====
+    private static final String TO_STDOUT_LONG_OPTION = "to-stdout";
+    private static final String TO_STDOUT_DESC = "Write output to stdout instead of file (single format only)";
 
     // ===== Export Options (internal) =====
     public static final String EXPORT_OPTIONS_LONG_OPTION = "export-options";
@@ -170,11 +180,14 @@ public class CLIOptions {
             new OptionDefinition(PAGES_LONG_OPTION, null, "string", null, PAGES_DESC, true),
             new OptionDefinition(INCLUDE_HEADER_FOOTER_LONG_OPTION, null, "boolean", false,
                     INCLUDE_HEADER_FOOTER_DESC, true),
+            new OptionDefinition(DETECT_STRIKETHROUGH_LONG_OPTION, null, "boolean", false,
+                    DETECT_STRIKETHROUGH_DESC, true),
             new OptionDefinition(HYBRID_LONG_OPTION, null, "string", "off", HYBRID_DESC, true),
             new OptionDefinition(HYBRID_MODE_LONG_OPTION, null, "string", "auto", HYBRID_MODE_DESC, true),
             new OptionDefinition(HYBRID_URL_LONG_OPTION, null, "string", null, HYBRID_URL_DESC, true),
-            new OptionDefinition(HYBRID_TIMEOUT_LONG_OPTION, null, "string", "30000", HYBRID_TIMEOUT_DESC, true),
+            new OptionDefinition(HYBRID_TIMEOUT_LONG_OPTION, null, "string", "0", HYBRID_TIMEOUT_DESC, true),
             new OptionDefinition(HYBRID_FALLBACK_LONG_OPTION, null, "boolean", false, HYBRID_FALLBACK_DESC, true),
+            new OptionDefinition(TO_STDOUT_LONG_OPTION, null, "boolean", false, TO_STDOUT_DESC, true),
             new OptionDefinition(EXPORT_OPTIONS_LONG_OPTION, null, "boolean", null, null, false),
 
             // Legacy options (not exported, for backward compatibility)
@@ -229,6 +242,9 @@ public class CLIOptions {
         }
         if (commandLine.hasOption(INCLUDE_HEADER_FOOTER_LONG_OPTION)) {
             config.setIncludeHeaderFooter(true);
+        }
+        if (commandLine.hasOption(DETECT_STRIKETHROUGH_LONG_OPTION)) {
+            config.setDetectStrikethrough(true);
         }
         if (commandLine.hasOption(CLIOptions.READING_ORDER_LONG_OPTION)) {
             config.setReadingOrder(commandLine.getOptionValue(CLIOptions.READING_ORDER_LONG_OPTION));
@@ -491,12 +507,15 @@ public class CLIOptions {
                     config.getHybridConfig().setTimeoutMs(timeout);
                 } catch (NumberFormatException e) {
                     throw new IllegalArgumentException(
-                            String.format("Invalid timeout value '%s'. Must be a positive integer.", timeoutValue));
+                            String.format("Invalid timeout value '%s'. Must be a non-negative integer.", timeoutValue));
                 }
             }
         }
         if (commandLine.hasOption(HYBRID_FALLBACK_LONG_OPTION)) {
             config.getHybridConfig().setFallbackToJava(true);
+        }
+        if (commandLine.hasOption(TO_STDOUT_LONG_OPTION)) {
+            config.setOutputStdout(true);
         }
     }
 

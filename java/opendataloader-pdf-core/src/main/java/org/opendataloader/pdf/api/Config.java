@@ -82,6 +82,7 @@ public class Config {
     private String hybrid = HYBRID_OFF;
     private final HybridConfig hybridConfig = new HybridConfig();
     private boolean includeHeaderFooter = false;
+    private boolean detectStrikethrough = false;
 
     /** Table detection method: default (border-based detection). */
     public static final String TABLE_METHOD_DEFAULT = "default";
@@ -844,6 +845,33 @@ public class Config {
      */
     public void setIncludeHeaderFooter(boolean includeHeaderFooter) {
         this.includeHeaderFooter = includeHeaderFooter;
+    }
+
+    public boolean isDetectStrikethrough() {
+        return detectStrikethrough;
+    }
+
+    public void setDetectStrikethrough(boolean detectStrikethrough) {
+        this.detectStrikethrough = detectStrikethrough;
+    }
+
+    private boolean outputStdout = false;
+
+    public boolean isOutputStdout() {
+        return outputStdout;
+    }
+
+    public void setOutputStdout(boolean outputStdout) {
+        this.outputStdout = outputStdout;
+    }
+
+    /**
+     * Returns true if any output format requires structured content
+     * (reading order, heading levels, list detection, etc.).
+     * Text-only output does not need these expensive processing steps.
+     */
+    public boolean needsStructuredProcessing() {
+        return isGenerateMarkdown() || isGenerateHtml() || isGenerateJSON() || isGeneratePDF();
     }
 
 }

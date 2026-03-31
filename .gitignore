@@ -74,6 +74,9 @@ logs/
 .codex-worktrees/
 .deps/
 
+# Git worktrees
+.worktrees/
+
 # Configuration files
 .claude/settings.local.json
 .claude/plans/

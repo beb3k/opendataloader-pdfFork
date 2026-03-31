@@ -18,6 +18,7 @@ package org.opendataloader.pdf.processors;
 import org.opendataloader.pdf.containers.StaticLayoutContainers;
 import org.opendataloader.pdf.utils.BulletedParagraphUtils;
 import org.opendataloader.pdf.utils.TextNodeStatistics;
+import org.opendataloader.pdf.utils.TextNodeUtils;
 import org.verapdf.wcag.algorithms.entities.INode;
 import org.verapdf.wcag.algorithms.entities.IObject;
 import org.verapdf.wcag.algorithms.entities.SemanticHeading;
@@ -191,7 +192,12 @@ public class HeadingProcessor {
     public static void detectHeadingsLevels() {
         SortedMap<TextStyle, Set<SemanticHeading>> map = new TreeMap<>();
         List<SemanticHeading> headings = StaticLayoutContainers.getHeadings();
+        List<SemanticHeading> colorlessHeadings = new ArrayList<>();
         for (SemanticHeading heading : headings) {
+            if (TextNodeUtils.getTextColorOrNull(heading) == null) {
+                colorlessHeadings.add(heading);
+                continue;
+            }
             TextStyle textStyle = TextStyle.getTextStyle(heading);
             map.computeIfAbsent(textStyle, k -> new HashSet<>()).add(heading);
         }
@@ -206,5 +212,33 @@ public class HeadingProcessor {
                 heading.setHeadingLevel(level);
             }
         }
+        // Headings without color info get level based on font size relative to existing levels
+        for (SemanticHeading heading : colorlessHeadings) {
+            heading.setHeadingLevel(findClosestLevel(heading, map));
+        }
+    }
+
+    private static int findClosestLevel(SemanticHeading heading, SortedMap<TextStyle, Set<SemanticHeading>> map) {
+        if (map.isEmpty()) {
+            return 1;
+        }
+        double fontSize = heading.getFontSize();
+        int bestLevel = 1;
+        double bestDiff = Double.MAX_VALUE;
+        int level = 1;
+        TextStyle previousStyle = null;
+        for (Map.Entry<TextStyle, Set<SemanticHeading>> entry : map.entrySet()) {
+            if (previousStyle != null && previousStyle.compareTo(entry.getKey()) != 0) {
+                level++;
+            }
+            previousStyle = entry.getKey();
+            SemanticHeading representative = entry.getValue().iterator().next();
+            double diff = Math.abs(representative.getFontSize() - fontSize);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                bestLevel = level;
+            }
+        }
+        return bestLevel;
     }
 }

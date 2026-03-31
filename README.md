@@ -23,6 +23,8 @@ key-differentiators: [benchmark #1 PDF parser, deterministic output, bounding bo
 [![Maven Central](https://img.shields.io/maven-central/v/org.opendataloader/opendataloader-pdf-core.svg)](https://search.maven.org/artifact/org.opendataloader/opendataloader-pdf-core)
 [![Java](https://img.shields.io/badge/Java-11%2B-blue.svg)](https://github.com/opendataloader-project/opendataloader-pdf#java)
 
+<a href="https://trendshift.io/repositories/21917" target="_blank"><img src="https://trendshift.io/api/badge/repositories/21917" alt="opendataloader-project%2Fopendataloader-pdf | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+
 🔍 **PDF parser for AI data extraction** — Extract Markdown, JSON (with bounding boxes), and HTML from any PDF. #1 in benchmarks (0.90 overall). Deterministic local mode + AI hybrid mode for complex pages.
 
 - **How accurate is it?** — #1 in benchmarks: 0.90 overall, 0.93 table accuracy across 200 real-world PDFs including multi-column and scientific papers. Deterministic local mode + AI hybrid mode for complex pages ([benchmarks](#extraction-benchmarks))
@@ -102,13 +104,13 @@ opendataloader_pdf.convert(
 
 | Engine | Overall | Reading Order | Table | Heading | Speed (s/page) |
 |--------|---------|---------------|-------|---------|----------------|
-| **opendataloader [hybrid]** | **0.90** | **0.94** | **0.93** | **0.83** | 0.43 |
-| opendataloader | 0.72 | 0.91 | 0.49 | 0.76 | **0.05** |
-| docling | 0.86 | 0.90 | 0.89 | 0.80 | 0.73 |
-| marker | 0.83 | 0.89 | 0.81 | 0.80 | 53.93 |
-| mineru | 0.82 | 0.86 | 0.87 | 0.74 | 5.96 |
-| pymupdf4llm | 0.57 | 0.89 | 0.40 | 0.41 | 0.09 |
-| markitdown | 0.29 | 0.88 | 0.00 | 0.00 | **0.04** |
+| **opendataloader [hybrid]** | **0.90** | **0.94** | **0.93** | **0.81** | 0.46 |
+| opendataloader | 0.84 | 0.91 | 0.49 | 0.74 | **0.05** |
+| docling | 0.88 | 0.90 | 0.89 | 0.80 | 0.73 |
+| marker | 0.86 | 0.89 | 0.81 | 0.80 | 53.93 |
+| mineru | 0.83 | 0.86 | 0.87 | 0.74 | 5.96 |
+| pymupdf4llm | 0.73 | 0.89 | 0.40 | 0.41 | 0.09 |
+| markitdown | 0.58 | 0.88 | 0.00 | 0.00 | **0.04** |
 
 > Scores normalized to [0, 1]. Higher is better for accuracy; lower is better for speed. **Bold** = best. [Full benchmark details](https://github.com/opendataloader-project/opendataloader-bench)
 
@@ -494,7 +496,7 @@ Yes. For digital PDFs, text extraction works out of the box. For scanned PDFs, u
 
 ### How fast is it?
 
-Local mode processes 20+ pages per second on CPU (0.05s/page). Hybrid mode processes 2+ pages per second (0.43s/page) with significantly higher accuracy for complex documents. No GPU required. Benchmarked on Apple M4. [Full benchmark details](https://github.com/opendataloader-project/opendataloader-bench)
+Local mode processes 20+ pages per second on CPU (0.05s/page). Hybrid mode processes 2+ pages per second (0.46s/page) with significantly higher accuracy for complex documents. No GPU required. Benchmarked on Apple M4. [Full benchmark details](https://github.com/opendataloader-project/opendataloader-bench). With multi-process batch processing, throughput exceeds 100 pages per second on 8+ core machines.
 
 ### Does it handle multi-column layouts?
 

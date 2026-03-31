@@ -46,7 +46,7 @@ import java.util.logging.Logger;
 public class MarkdownGenerator implements Closeable {
 
     protected static final Logger LOGGER = Logger.getLogger(MarkdownGenerator.class.getCanonicalName());
-    protected final FileWriter markdownWriter;
+    protected final java.io.Writer markdownWriter;
     protected final String markdownFileName;
     protected int tableNesting = 0;
     protected boolean isImageSupported;
@@ -62,6 +62,19 @@ public class MarkdownGenerator implements Closeable {
         this.isImageSupported = !config.isImageOutputOff() && config.isGenerateMarkdown();
         this.markdownPageSeparator = config.getMarkdownPageSeparator();
         this.embedImages = config.isEmbedImages();
+        this.imageFormat = config.getImageFormat();
+        this.includeHeaderFooter = config.isIncludeHeaderFooter();
+    }
+
+    /**
+     * Creates a MarkdownGenerator that writes to an arbitrary Writer (e.g., stdout).
+     */
+    public MarkdownGenerator(java.io.Writer writer, Config config) {
+        this.markdownFileName = null;
+        this.markdownWriter = writer;
+        this.isImageSupported = false;
+        this.markdownPageSeparator = config.getMarkdownPageSeparator();
+        this.embedImages = false;
         this.imageFormat = config.getImageFormat();
         this.includeHeaderFooter = config.isIncludeHeaderFooter();
     }
@@ -181,18 +194,11 @@ public class MarkdownGenerator implements Closeable {
                     imageSource = relativePath;
                 }
                 if (imageSource != null) {
-                    // Use simple alt text
-                    String altText = "image " + picture.getPictureIndex();
+                    String altText = picture.hasDescription()
+                            ? picture.sanitizeDescription()
+                            : "image " + picture.getPictureIndex();
                     String imageString = String.format(MarkdownSyntax.IMAGE_FORMAT, altText, imageSource);
                     markdownWriter.write(getCorrectMarkdownString(imageString));
-
-                    // Add caption as italic text below the image if description available
-                    if (picture.hasDescription()) {
-                        markdownWriter.write(MarkdownSyntax.DOUBLE_LINE_BREAK);
-                        String caption = picture.getDescription().replace("\n", " ").replace("\r", "");
-                        markdownWriter.write("*" + getCorrectMarkdownString(caption) + "*");
-                        markdownWriter.write(MarkdownSyntax.DOUBLE_LINE_BREAK);
-                    }
                 }
             }
         } catch (IOException e) {
@@ -257,16 +263,22 @@ public class MarkdownGenerator implements Closeable {
 
     protected void writeTable(TableBorder table) throws IOException {
         enterTable();
-        for (TableBorderRow row : table.getRows()) {
+        for (int rowNumber = 0; rowNumber < table.getNumberOfRows(); rowNumber++) {
+            TableBorderRow row = table.getRow(rowNumber);
             markdownWriter.write(MarkdownSyntax.TABLE_COLUMN_SEPARATOR);
-            for (TableBorderCell cell : row.getCells()) {
-                List<IObject> cellContents = cell.getContents();
-                writeContents(cellContents, true);
+            for (int colNumber = 0; colNumber < table.getNumberOfColumns(); colNumber++) {
+                TableBorderCell cell = row.getCell(colNumber);
+                if (cell.getRowNumber() == rowNumber && cell.getColNumber() == colNumber) {
+                    List<IObject> cellContents = cell.getContents();
+                    writeContents(cellContents, true);
+                } else {
+                    writeSpace();
+                }
                 markdownWriter.write(MarkdownSyntax.TABLE_COLUMN_SEPARATOR);
             }
             markdownWriter.write(MarkdownSyntax.LINE_BREAK);
             //Due to markdown syntax we have to separate column headers
-            if (row.getRowNumber() == 0) {
+            if (rowNumber == 0) {
                 markdownWriter.write(MarkdownSyntax.TABLE_COLUMN_SEPARATOR);
                 for (int i = 0; i < table.getNumberOfColumns(); i++) {
                     markdownWriter.write(MarkdownSyntax.TABLE_HEADER_SEPARATOR);

@@ -28,6 +28,7 @@ import org.opendataloader.pdf.api.Config;
 import org.opendataloader.pdf.text.TextGenerator;
 import org.opendataloader.pdf.utils.ContentSanitizer;
 import org.opendataloader.pdf.utils.ImagesUtils;
+import org.opendataloader.pdf.utils.TextNodeUtils;
 import org.verapdf.as.ASAtom;
 import org.verapdf.containers.StaticCoreContainers;
 import org.verapdf.cos.COSDictionary;
@@ -51,9 +52,12 @@ import org.verapdf.xmp.containers.StaticXmpCoreContainers;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -83,7 +87,9 @@ public class DocumentProcessor {
         } else {
             contents = processDocument(inputPdfName, config, pagesToProcess);
         }
-        sortContents(contents, config);
+        if (config.needsStructuredProcessing()) {
+            sortContents(contents, config);
+        }
         ContentSanitizer contentSanitizer = new ContentSanitizer(config.getFilterConfig().getFilterRules(),
             config.getFilterConfig().isFilterSensitiveData());
         contentSanitizer.sanitizeContents(contents);
@@ -132,49 +138,153 @@ public class DocumentProcessor {
         return validPages;
     }
 
+    @SuppressWarnings("unchecked")
     private static List<List<IObject>> processDocument(String inputPdfName, Config config, Set<Integer> pagesToProcess) throws IOException {
-        List<List<IObject>> contents = new ArrayList<>();
         int totalPages = StaticContainers.getDocument().getNumberOfPages();
-        for (int pageNumber = 0; pageNumber < totalPages; pageNumber++) {
-            if (shouldProcessPage(pageNumber, pagesToProcess)) {
-                List<IObject> pageContents = ContentFilterProcessor.getFilteredContents(inputPdfName,
-                    StaticContainers.getDocument().getArtifacts(pageNumber), pageNumber, config);
-                contents.add(pageContents);
-            } else {
-                contents.add(new ArrayList<>()); // Empty placeholder for skipped pages
+        List<List<IObject>> contents = new ArrayList<>(Collections.nCopies(totalPages, null));
+
+        // Capture ALL ThreadLocal state from main thread for propagation to workers
+        final var document = StaticContainers.getDocument();
+        final var tableBordersCollection = StaticContainers.getTableBordersCollection();
+        final var accumulatedNodeMapper = StaticContainers.getAccumulatedNodeMapper();
+        final var objectKeyMapper = StaticContainers.getObjectKeyMapper();
+        final boolean keepLineBreaks = StaticContainers.isKeepLineBreaks();
+        final boolean isDataLoader = StaticContainers.isDataLoader();
+        final var isIgnoreCharsWithoutUnicode = StaticContainers.getIsIgnoreCharactersWithoutUnicode();
+
+        // Capture StaticLayoutContainers state (shared mutable — synchronized list for headings)
+        final var headings = StaticLayoutContainers.getHeadings();
+        final long contentId = StaticLayoutContainers.getCurrentContentId();
+        final boolean useStructTree = StaticLayoutContainers.isUseStructTree();
+
+        // Runnable that propagates ThreadLocal state to the current (worker) thread
+        final Runnable propagateState = () -> {
+            // veraPDF StaticContainers
+            StaticContainers.setDocument(document);
+            StaticContainers.setTableBordersCollection(tableBordersCollection);
+            StaticContainers.setAccumulatedNodeMapper(accumulatedNodeMapper);
+            StaticContainers.setObjectKeyMapper(objectKeyMapper);
+            StaticContainers.setKeepLineBreaks(keepLineBreaks);
+            StaticContainers.setIsDataLoader(isDataLoader);
+            StaticContainers.setIsIgnoreCharactersWithoutUnicode(isIgnoreCharsWithoutUnicode);
+            // Project StaticLayoutContainers — share the same headings list across workers
+            StaticLayoutContainers.setHeadings(headings);
+            StaticLayoutContainers.setCurrentContentId(contentId);
+            StaticLayoutContainers.setIsUseStructTree(useStructTree);
+        };
+
+        // Pre-fetch all page artifacts on main thread (document access is ThreadLocal)
+        List<?>[] pageArtifacts = new List<?>[totalPages];
+        for (int i = 0; i < totalPages; i++) {
+            pageArtifacts[i] = document.getArtifacts(i);
+        }
+
+        int parallelism = Runtime.getRuntime().availableProcessors();
+        ForkJoinPool pool = new ForkJoinPool(parallelism);
+        LOGGER.log(Level.INFO, "Processing {0} pages with {1} threads", new Object[]{totalPages, parallelism});
+
+        try {
+            // Loop 1: ContentFilter per-page (largest bottleneck)
+            pool.submit(() ->
+                IntStream.range(0, totalPages).parallel().forEach(pageNumber -> {
+                    try {
+                        propagateState.run();
+                        if (shouldProcessPage(pageNumber, pagesToProcess)) {
+                            List<IObject> pageContents = ContentFilterProcessor.getFilteredContents(inputPdfName,
+                                (List) pageArtifacts[pageNumber], pageNumber, config);
+                            contents.set(pageNumber, pageContents);
+                        } else {
+                            contents.set(pageNumber, new ArrayList<>());
+                        }
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                })
+            ).get();
+
+            // Hidden text detection: sequential post-processing (requires ContrastRatioConsumer
+            // which renders PDF pages — not safe to parallelize due to per-thread PDF file I/O)
+            if (config.getFilterConfig().isFilterHiddenText()) {
+                for (int pageNumber = 0; pageNumber < totalPages; pageNumber++) {
+                    if (shouldProcessPage(pageNumber, pagesToProcess)) {
+                        List<IObject> pageContents = HiddenTextProcessor.findHiddenText(
+                            inputPdfName, contents.get(pageNumber), true, config.getPassword());
+                        contents.set(pageNumber, pageContents);
+                    }
+                }
             }
-        }
-        if (config.isClusterTableMethod()) {
-            new ClusterTableProcessor().processTables(contents);
-        }
-        for (int pageNumber = 0; pageNumber < totalPages; pageNumber++) {
-            if (!shouldProcessPage(pageNumber, pagesToProcess)) {
-                continue;
+
+            boolean structured = config.needsStructuredProcessing();
+
+            // ClusterTableProcessor: whole-document (must be sequential)
+            if (structured && config.isClusterTableMethod()) {
+                new ClusterTableProcessor().processTables(contents);
             }
-            List<IObject> pageContents = TableBorderProcessor.processTableBorders(contents.get(pageNumber), pageNumber);
-            pageContents = pageContents.stream().filter(x -> !(x instanceof LineChunk)).collect(Collectors.toList());
-            pageContents = TextLineProcessor.processTextLines(pageContents);
-            pageContents = SpecialTableProcessor.detectSpecialTables(pageContents);
-            contents.set(pageNumber, pageContents);
-        }
-        HeaderFooterProcessor.processHeadersAndFooters(contents, false);
-        ListProcessor.processLists(contents, false);
-        for (int pageNumber = 0; pageNumber < totalPages; pageNumber++) {
-            if (!shouldProcessPage(pageNumber, pagesToProcess)) {
-                continue;
+
+            // Loop 2: TableBorder + TextLine per-page
+            pool.submit(() ->
+                IntStream.range(0, totalPages).parallel().forEach(pageNumber -> {
+                    if (!shouldProcessPage(pageNumber, pagesToProcess)) {
+                        return;
+                    }
+                    propagateState.run();
+                    List<IObject> pageContents = contents.get(pageNumber);
+                    if (structured) {
+                        pageContents = TableBorderProcessor.processTableBorders(pageContents, pageNumber);
+                        if (config.isDetectStrikethrough()) {
+                            StrikethroughProcessor.processStrikethroughs(pageContents);
+                        }
+                        pageContents = pageContents.stream().filter(x -> !(x instanceof LineChunk)).collect(Collectors.toList());
+                        pageContents = SpecialTableProcessor.detectSpecialTables(pageContents);
+                    }
+                    pageContents = TextLineProcessor.processTextLines(pageContents);
+                    contents.set(pageNumber, pageContents);
+                })
+            ).get();
+
+            if (structured) {
+                // Cross-page operations (must be sequential)
+                HeaderFooterProcessor.processHeadersAndFooters(contents, false);
+                ListProcessor.processLists(contents, false);
             }
-            List<IObject> pageContents = contents.get(pageNumber);
-            pageContents = ParagraphProcessor.processParagraphs(pageContents);
-            pageContents = ListProcessor.processListsFromTextNodes(pageContents);
-            HeadingProcessor.processHeadings(pageContents, false);
-            setIDs(pageContents);
-            CaptionProcessor.processCaptions(pageContents);
-            contents.set(pageNumber, pageContents);
+
+            // Loop 3: Paragraph + Heading per-page (always need ParagraphProcessor for text output)
+            pool.submit(() ->
+                IntStream.range(0, totalPages).parallel().forEach(pageNumber -> {
+                    if (!shouldProcessPage(pageNumber, pagesToProcess)) {
+                        return;
+                    }
+                    propagateState.run();
+                    List<IObject> pageContents = contents.get(pageNumber);
+                    pageContents = ParagraphProcessor.processParagraphs(pageContents);
+                    if (structured) {
+                        pageContents = ListProcessor.processListsFromTextNodes(pageContents);
+                        HeadingProcessor.processHeadings(pageContents, false);
+                        CaptionProcessor.processCaptions(pageContents);
+                    }
+                    contents.set(pageNumber, pageContents);
+                })
+            ).get();
+
+            // Sequential ID assignment (must be in page order)
+            for (int pageNumber = 0; pageNumber < totalPages; pageNumber++) {
+                if (shouldProcessPage(pageNumber, pagesToProcess)) {
+                    setIDs(contents.get(pageNumber));
+                }
+            }
+
+            if (structured) {
+                // Cross-page post-processing (must be sequential)
+                ListProcessor.checkNeighborLists(contents);
+                TableBorderProcessor.checkNeighborTables(contents);
+                HeadingProcessor.detectHeadingsLevels();
+                LevelProcessor.detectLevels(contents);
+            }
+        } catch (Exception e) {
+            throw new IOException("Parallel page processing failed", e);
+        } finally {
+            pool.shutdown();
         }
-        ListProcessor.checkNeighborLists(contents);
-        TableBorderProcessor.checkNeighborTables(contents);
-        HeadingProcessor.detectHeadingsLevels();
-        LevelProcessor.detectLevels(contents);
         return contents;
     }
 
@@ -190,6 +300,23 @@ public class DocumentProcessor {
     }
 
     private static void generateOutputs(String inputPdfName, List<List<IObject>> contents, Config config) throws IOException {
+        // Stdout mode: write primary format to stdout, skip file I/O
+        if (config.isOutputStdout()) {
+            java.io.Writer stdoutWriter = new java.io.BufferedWriter(
+                new java.io.OutputStreamWriter(System.out, java.nio.charset.StandardCharsets.UTF_8));
+            if (config.isGenerateText()) {
+                TextGenerator textGenerator = new TextGenerator(stdoutWriter, config);
+                textGenerator.writeToText(contents);
+                stdoutWriter.flush();
+            } else if (config.isGenerateMarkdown()) {
+                MarkdownGenerator markdownGenerator = new MarkdownGenerator(stdoutWriter, config);
+                markdownGenerator.writeToMarkdown(contents);
+                stdoutWriter.flush();
+            }
+            // JSON and HTML stdout not yet supported
+            return;
+        }
+
         File inputPDF = new File(inputPdfName);
         new File(config.getOutputFolder()).mkdirs();
         if (!config.isImageOutputOff() && (config.isGenerateHtml() || config.isGenerateMarkdown() || config.isGenerateJSON())) {
@@ -356,7 +483,7 @@ public class DocumentProcessor {
     public static String getContentsValueForTextNode(SemanticTextNode textNode) {
         return String.format("%s: font %s, text size %.2f, text color %s, text content \"%s\"",
                 textNode.getSemanticType().getValue(), textNode.getFontName(),
-                textNode.getFontSize(), Arrays.toString(textNode.getTextColor()),
+                textNode.getFontSize(), Arrays.toString(TextNodeUtils.getTextColorOrDefault(textNode)),
                 textNode.getValue().length() > 15 ? textNode.getValue().substring(0, 15) + "..." : textNode.getValue());
     }
 
@@ -433,11 +560,11 @@ public class DocumentProcessor {
     public static void sortContents(List<List<IObject>> contents, Config config) {
         String readingOrder = config.getReadingOrder();
 
-        // xycut: XY-Cut++ sorting
+        // xycut: XY-Cut++ sorting (per-page, stateless — safe to parallelize)
         if (Config.READING_ORDER_XYCUT.equals(readingOrder)) {
-            for (int pageNumber = 0; pageNumber < StaticContainers.getDocument().getNumberOfPages(); pageNumber++) {
-                contents.set(pageNumber, XYCutPlusPlusSorter.sort(contents.get(pageNumber)));
-            }
+            IntStream.range(0, StaticContainers.getDocument().getNumberOfPages()).parallel().forEach(pageNumber ->
+                contents.set(pageNumber, XYCutPlusPlusSorter.sort(contents.get(pageNumber)))
+            );
             return;
         }
 
