@@ -17,6 +17,7 @@ Read this file first. It is the repo entry point for agents and reviewers.
 - Layer map: [docs/architecture/LAYERS.md](docs/architecture/LAYERS.md)
 - Coding rules: [generated artifacts](docs/golden-principles/generated-artifacts.md), [thin wrappers and entry points](docs/golden-principles/thin-wrappers.md), [validation](docs/golden-principles/validation.md), [public surface](docs/golden-principles/public-surface.md)
 - Review routing: [docs/guides/AGENT_REVIEW.md](docs/guides/AGENT_REVIEW.md)
+- Optional review helper: [docs/guides/CODE_REVIEW_GRAPH.md](docs/guides/CODE_REVIEW_GRAPH.md)
 
 ## Must Know
 
@@ -24,6 +25,7 @@ Read this file first. It is the repo entry point for agents and reviewers.
 - `content/docs/` syncs to opendataloader.org on release. Treat edits there as public product changes.
 - `--enrich-formula` and `--enrich-picture-description` only work in hybrid mode when the client also uses `--hybrid-mode full`.
 - The Java modules are the source of truth. Wrappers should stay thin and should not reimplement parsing behavior.
+- `code-review-graph` is optional context narrowing for agents. It does not replace the review checklist, boundary rules, or required validation.
 
 ## Core Commands
 

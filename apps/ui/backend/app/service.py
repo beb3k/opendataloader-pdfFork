@@ -4,6 +4,7 @@ import importlib
 import importlib.metadata as metadata
 import json
 import mimetypes
+import os
 import shutil
 import tempfile
 import threading
@@ -53,7 +54,68 @@ def repo_root_from_here() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
+def configure_java_runtime() -> None:
+    java_home = find_preferred_java_home()
+    if not java_home:
+        return
+
+    java_bin = str(java_home / "bin")
+    current_path = os.environ.get("PATH", "")
+    path_entries = [entry for entry in current_path.split(os.pathsep) if entry]
+
+    os.environ["JAVA_HOME"] = str(java_home)
+
+    if path_entries and path_entries[0] == java_bin:
+        return
+
+    remaining_entries = [entry for entry in path_entries if entry != java_bin]
+    os.environ["PATH"] = os.pathsep.join([java_bin, *remaining_entries])
+
+
+def find_preferred_java_home() -> Path | None:
+    configured_home = java_home_from_value(os.environ.get("JAVA_HOME"))
+    if configured_home:
+        return configured_home
+
+    if os.name != "nt":
+        return None
+
+    candidates: list[Path] = []
+    program_files_java = Path("C:/Program Files/Java")
+    candidates.append(program_files_java / "latest")
+    candidates.extend(sorted(program_files_java.glob("jdk-*"), reverse=True))
+
+    zulu_root = Path("C:/Program Files/Zulu")
+    candidates.extend(sorted(zulu_root.glob("zulu-*"), reverse=True))
+
+    for candidate in candidates:
+        resolved_home = java_home_from_value(str(candidate))
+        if resolved_home:
+            return resolved_home
+
+    return None
+
+
+def java_home_from_value(value: str | None) -> Path | None:
+    if not value:
+        return None
+
+    candidate = Path(value)
+    if not (candidate / "bin" / java_binary_name()).exists():
+        return None
+
+    return candidate
+
+
+def java_binary_name() -> str:
+    if os.name == "nt":
+        return "java.exe"
+
+    return "java"
+
+
 def load_installed_converter() -> Callable[..., None]:
+    configure_java_runtime()
     repo_root = repo_root_from_here()
     source_package_dir = repo_root / "python" / "opendataloader-pdf" / "src" / "opendataloader_pdf"
     try:
@@ -282,13 +344,45 @@ class JobService:
     def resolve_file_path(self, job_id: str, relative_name: str) -> Path:
         with self._lock:
             record = self._require_job(job_id)
-            target = (record.output_dir / relative_name).resolve()
-            output_root = record.output_dir.resolve()
-            if output_root not in target.parents and target != output_root:
-                raise JobNotFoundError("File not found")
-            if not target.exists() or not target.is_file():
-                raise JobNotFoundError("File not found")
-            return target
+            return self._resolve_output_path(record, relative_name)
+
+    def build_page_preview(self, job_id: str, relative_name: str, page_number: int) -> PreviewPayload:
+        if page_number < 1:
+            raise InvalidJobRequestError("Page number must be positive")
+
+        with tempfile.TemporaryDirectory(prefix=f"{job_id}-preview-") as temp_dir:
+            preview_dir = Path(temp_dir)
+            preview_output_dir = preview_dir / "output"
+            preview_output_dir.mkdir(parents=True, exist_ok=True)
+
+            with self._lock:
+                record = self._require_job(job_id)
+                target = self._resolve_output_path(record, relative_name)
+                preview_kind = PREVIEW_EXTENSIONS.get(target.suffix.lower())
+                if preview_kind is None:
+                    raise JobNotFoundError("File not found")
+
+                preview_format = self._preview_format_for_kind(record.options, preview_kind)
+                if preview_format is None:
+                    raise JobNotFoundError("Preview not available")
+
+                temp_input_path = preview_dir / record.input_path.name
+                shutil.copy2(record.input_path, temp_input_path)
+                options = record.options
+
+            kwargs = build_convert_kwargs(options, preview_output_dir)
+            kwargs["format"] = [preview_format]
+            kwargs["pages"] = str(page_number)
+            self.converter(str(temp_input_path), **kwargs)
+
+            preview_path = preview_output_dir / self._preview_file_name(temp_input_path.stem, preview_format)
+            if not preview_path.exists():
+                raise JobNotFoundError("Preview not available")
+
+            return PreviewPayload(
+                kind=preview_kind,
+                content=preview_path.read_text(encoding="utf-8", errors="replace"),
+            )
 
     def build_bundle(self, job_id: str) -> Path:
         with self._lock:
@@ -312,6 +406,38 @@ class JobService:
             return self._jobs[job_id]
         except KeyError as exc:
             raise JobNotFoundError("Job not found") from exc
+
+    def _resolve_output_path(self, record: JobRecord, relative_name: str) -> Path:
+        target = (record.output_dir / relative_name).resolve()
+        output_root = record.output_dir.resolve()
+        if output_root not in target.parents and target != output_root:
+            raise JobNotFoundError("File not found")
+        if not target.exists() or not target.is_file():
+            raise JobNotFoundError("File not found")
+        return target
+
+    def _preview_format_for_kind(self, options: JobOptions, preview_kind: str) -> str | None:
+        if preview_kind == "markdown":
+            for output_format in options.output_formats:
+                if output_format.startswith("markdown"):
+                    return output_format
+            return "markdown"
+
+        if preview_kind in {"json", "html", "text"}:
+            return preview_kind
+
+        return None
+
+    def _preview_file_name(self, base_name: str, preview_format: str) -> str:
+        if preview_format.startswith("markdown"):
+            return f"{base_name}.md"
+        if preview_format == "text":
+            return f"{base_name}.txt"
+        if preview_format == "html":
+            return f"{base_name}.html"
+        if preview_format == "json":
+            return f"{base_name}.json"
+        return f"{base_name}.{preview_format}"
 
     def _collect_files(self, record: JobRecord) -> list[JobFile]:
         results: list[JobFile] = []

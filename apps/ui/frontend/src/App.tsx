@@ -404,6 +404,7 @@ function buildViewerTabs({
   const jsonFile = findOutputFile(files, "json");
   const htmlFile = findOutputFile(files, "html");
   const textFile = findOutputFile(files, "text");
+  const htmlPageCopies = buildPageCopies(htmlFile?.preview);
   const markdownPageCopies = buildPageCopies(markdownFile?.preview);
   const jsonPageCopies = buildPageCopies(jsonFile?.preview);
   const textPageCopies = buildPageCopies(textFile?.preview);
@@ -443,20 +444,7 @@ function buildViewerTabs({
       case "preview":
         return createTextTab(id, VIEWER_TAB_LABELS[id], api, job, textFile, isBusy, textPageCopies);
       case "html":
-        return {
-          id,
-          label: VIEWER_TAB_LABELS[id],
-          enabled: Boolean(job && htmlFile && htmlFile.preview?.content),
-          loading: Boolean(isBusy && !htmlFile),
-          panelType: "html",
-          content: htmlFile?.preview?.content ?? null,
-          copyText: null,
-          pageCopies: undefined,
-          pagePreviewHref: null,
-          downloadHref: job && htmlFile ? api.downloadFileUrl(job.id, htmlFile.name) : null,
-          downloadName: htmlFile?.name ?? null,
-          dataUrl: null,
-        } satisfies ViewerTabDefinition;
+        return createHtmlTab(api, job, htmlFile, isBusy, htmlPageCopies);
       case "markdown":
         return createTextTab(
           id,
@@ -503,6 +491,29 @@ function createTextTab(
     panelType: "text",
     content: file?.preview?.content ?? null,
     copyText: file?.preview?.content ?? null,
+    pageCopies,
+    pagePreviewHref: buildPagePreviewHref(job, file, api),
+    downloadHref: job && file ? api.downloadFileUrl(job.id, file.name) : null,
+    downloadName: file?.name ?? null,
+    dataUrl: null,
+  };
+}
+
+function createHtmlTab(
+  api: UiApi,
+  job: JobRecord | null,
+  file: JobFile | null,
+  isBusy: boolean,
+  pageCopies?: PreviewPagePayload[],
+): ViewerTabDefinition {
+  return {
+    id: "html",
+    label: VIEWER_TAB_LABELS.html,
+    enabled: Boolean(job && file && file.preview?.content),
+    loading: Boolean(isBusy && !file),
+    panelType: "html",
+    content: file?.preview?.content ?? null,
+    copyText: null,
     pageCopies,
     pagePreviewHref: buildPagePreviewHref(job, file, api),
     downloadHref: job && file ? api.downloadFileUrl(job.id, file.name) : null,

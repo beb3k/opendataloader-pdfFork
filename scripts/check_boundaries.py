@@ -20,6 +20,7 @@ REQUIRED_DOCS = [
     REPO_ROOT / "docs" / "golden-principles" / "validation.md",
     REPO_ROOT / "docs" / "golden-principles" / "public-surface.md",
     REPO_ROOT / "docs" / "guides" / "AGENT_REVIEW.md",
+    REPO_ROOT / "docs" / "guides" / "CODE_REVIEW_GRAPH.md",
 ]
 
 MARKDOWN_LINK_SOURCES = REQUIRED_DOCS

@@ -1,6 +1,6 @@
 # UI Handover
 
-Date: 2026-03-23
+Date: 2026-03-24
 
 This is the current handoff for the local browser UI in `apps/ui/`.
 
@@ -14,19 +14,22 @@ Use `apps/ui/CHECKPOINT.md` as older history only.
 - Frontend dev server: `http://127.0.0.1:5173`
 - The staged workflow and viewer shell are in place.
 - The viewer reset flow is cleaner than before.
-- The thumbnail rail is more stable than before.
-- The live browser still has follow-up polish and usability work to close out.
+- `Preview`, `HTML`, `MD`, and `JSON` now respond to the selected page.
+- The text-style result tabs now use the same viewer backdrop instead of switching to a mismatched background.
+- A simple hand tool toggle now exists in the document viewer.
+- The plain PDF footer filler text has been removed.
+- Rotating the main PDF no longer rotates the thumbnails.
+- The backend already has a page-preview route, so the remaining work is still frontend polish and usability.
 
 ## What Was Completed This Session
 
-The session closed out the previous four handoff issues.
-
 Fixed now:
 
-- the same PDF can be selected again after `Start over`
-- starting a second job no longer reuses stale canvas work
-- the thumbnail frame now appears as soon as the conversion finishes
-- the thumbnail rail no longer stretches vertically when switching to text-heavy tabs
+- `Preview`, `HTML`, `MD`, and `JSON` follow the selected page instead of always showing the whole document
+- the non-PDF tabs now use the same viewer backdrop pattern
+- the viewer has a basic hand tool toggle
+- the PDF tab no longer shows `Plain PDF view.`
+- rotating the main page no longer rotates the thumbnail rail
 
 Implementation areas touched:
 
@@ -42,73 +45,28 @@ Verified in this session:
 
 - targeted frontend tests passed with `npm run test -- App.test.tsx BoundingBoxPreview.test.tsx`
 - frontend build passed with `npm run build`
-- the local UI started successfully
-- backend health returned `{"status":"ok"}`
-- frontend returned `200`
 
 Important limitation:
 
-- this session did not do a full manual click-through of every remaining browser interaction
-- the remaining issues below should still be reproduced in the live UI before fixing them
+- this session did not do a full live browser click-through of the remaining viewer interactions
+- the hand tool was verified through tests and state checks, not through a full manual browser pass
+- the remaining issues below should be reproduced in the live UI before fixing them
 
 ## Open Issues For Next Session
 
-### 1. `Preview`, `HTML`, `MD`, and `JSON` still are not page-aware
+### 1. `HTML` tab layout does not fill the available height
 
 What still happens:
 
-- clicking page thumbnails only really matters for `PDF` and `Annot`
-- `Preview`, `HTML`, `MD`, and `JSON` still behave like one long document instead of page-separated content
+- when switching to `HTML`, `bbox-page-panel-shell` collapses into the top portion of the container
+- a large empty area remains below it
+- `Preview` and the other text-style tabs stretch correctly, but `HTML` does not
 
 Expected behavior:
 
-- those four tabs should respond to the selected page
-- the right panel should show the content for the active page, not the whole document at once
-- the thumbnail rail should stay meaningful across all result tabs
-
-Likely files:
-
-- `apps/ui/frontend/src/App.tsx`
-- `apps/ui/frontend/src/components/BoundingBoxPreview.tsx`
-- `apps/ui/frontend/src/App.test.tsx`
-- `apps/ui/frontend/src/components/BoundingBoxPreview.test.tsx`
-
-Good next step:
-
-- inspect the current page-copy plumbing that already exists and extend it beyond copy behavior into actual page-scoped display
-
-### 2. Background color changes on `Preview`, `MD`, and `JSON`
-
-What still happens:
-
-- `PDF`, `Annot`, and `HTML` keep the normal light-brown page background
-- `Preview`, `MD`, and `JSON` shift to a pinkish-brown or darker brown background
-
-Expected behavior:
-
-- the background should stay visually consistent when switching tabs
-- the default light-brown background used by `PDF`, `Annot`, and `HTML` should remain the standard
-
-Likely files:
-
-- `apps/ui/frontend/src/styles.css`
-- `apps/ui/frontend/src/components/BoundingBoxPreview.tsx`
-
-Good next step:
-
-- compare the wrapper and panel classes used by text-style tabs against the document and HTML tabs
-
-### 3. Zoomed-in PDF needs a hand tool mode
-
-What still happens:
-
-- the stage is scrollable
-- but once the PDF is zoomed in, moving around the page becomes awkward and slow
-
-Expected behavior:
-
-- add a hand tool mode that lets the user click and drag the page to pan around
-- this should make zoomed-in navigation much easier without depending only on scrollbars
+- `bbox-page-panel-shell` should fill the available vertical space on `HTML` too
+- `HTML` should match the same full-height layout behavior used by the other page-aware tabs
+- switching between tabs should not change the overall panel height behavior
 
 Likely files:
 
@@ -118,40 +76,20 @@ Likely files:
 
 Good next step:
 
-- add a simple toggleable drag mode first
-- keep the behavior easy to understand and easy to turn off
+- compare the `HTML` wrapper/card sizing against the `Preview` and `MD` paths
+- check whether the `iframe` container or `is-html` styles are preventing the shell from stretching
 
-### 4. Remove the `Plain PDF view` footer text
-
-What still happens:
-
-- the PDF tab shows a footer that says `Plain PDF view.`
-
-Expected behavior:
-
-- remove that footer text from the PDF tab
-- it does not add useful information for the user
-
-Likely files:
-
-- `apps/ui/frontend/src/components/BoundingBoxPreview.tsx`
-
-Good next step:
-
-- keep the footer only where it adds real value
-- do not show a filler message for the plain PDF tab
-
-### 5. Rotating the main PDF also rotates the thumbnails
+### 2. The hand tool only pans horizontally
 
 What still happens:
 
-- rotating clockwise or counterclockwise rotates the main page correctly
-- the page thumbnails rotate too
+- the hand tool can move the document left and right
+- the same interaction does not move the document vertically in the way it should
 
 Expected behavior:
 
-- rotation should affect the main viewer only
-- thumbnails should stay upright
+- the hand tool should support both horizontal and vertical movement
+- users should be able to drag the document up, down, left, and right as needed
 
 Likely files:
 
@@ -160,18 +98,138 @@ Likely files:
 
 Good next step:
 
-- separate the main-page rotation state from thumbnail rendering
-- keep the thumbnail rail stable and predictable
+- reproduce the drag behavior in the live browser first
+- trace the current pointer math and verify both scroll axes update during drag
+
+### 3. The hand tool only becomes available when zoomed in
+
+What still happens:
+
+- the hand tool is currently gated behind zooming in
+- at fit-to-view or zoomed-out states, the hand tool is disabled
+
+Expected behavior:
+
+- the hand tool should be available at all zoom levels
+- users should be able to drag the document even when it fits within the viewport
+- movement should stay within sensible boundaries so the page cannot be dragged completely out of view
+- the document should still be repositionable enough for inspection
+
+In short:
+
+- enable the hand tool at all zoom levels
+- allow panning interaction at any time
+- constrain movement so the document stays within visible bounds
+
+Likely files:
+
+- `apps/ui/frontend/src/components/BoundingBoxPreview.tsx`
+- `apps/ui/frontend/src/styles.css`
+- `apps/ui/frontend/src/components/BoundingBoxPreview.test.tsx`
+
+Good next step:
+
+- decide whether the viewer should switch from plain scroll-based panning to explicit drag-position state
+- define the movement bounds before implementing so the page can move freely without disappearing
+
+### 4. Page navigation disappears on `Preview`, `HTML`, `MD`, and `JSON`
+
+What still happens:
+
+- `bbox-panel-toolbar` disappears when switching away from the document tabs
+- page navigation is then only available after switching back to another tab
+
+Expected behavior:
+
+- the toolbar, or at least the page navigation controls, should remain available across all result tabs
+- users should be able to move between pages without leaving the active tab
+- the controls should stay in a consistent place across views
+
+In short:
+
+- keep page navigation visible at all times
+- do not require users to switch tabs just to change pages
+
+Likely files:
+
+- `apps/ui/frontend/src/components/BoundingBoxPreview.tsx`
+- `apps/ui/frontend/src/styles.css`
+- `apps/ui/frontend/src/components/BoundingBoxPreview.test.tsx`
+
+Good next step:
+
+- split the toolbar into shared page-navigation controls plus document-only controls if needed
+- keep the shared navigation row mounted for every page-aware tab
+
+### 5. `bbox-page-list` needs a constrained height for large PDFs
+
+What still happens:
+
+- for long PDFs, the thumbnail list grows into a very tall column
+- users have to scroll a long way through the page to reach later thumbnails
+
+Expected behavior:
+
+- `bbox-page-list` should show only a limited number of thumbnails at once
+- if there are more pages than fit in that space, the thumbnail list itself should scroll internally
+- the overall viewer layout should stay compact even for large documents
+
+In short:
+
+- constrain the visible height of `bbox-page-list`
+- make the thumbnail rail internally scrollable for long documents
+
+Likely files:
+
+- `apps/ui/frontend/src/styles.css`
+- `apps/ui/frontend/src/components/BoundingBoxPreview.tsx`
+- `apps/ui/frontend/src/components/BoundingBoxPreview.test.tsx`
+
+Good next step:
+
+- choose a fixed visible height target such as roughly five thumbnails
+- verify desktop and mobile behavior separately after the height constraint is added
+
+### 6. Add direct page number input
+
+What still happens:
+
+- page navigation only uses previous and next arrow buttons
+- moving to a distant page requires repeated clicking
+
+Expected behavior:
+
+- add a page number input in the page controls
+- users should be able to type a page number and jump directly there
+- the input should validate against the real page range
+- the UI should still show the total number of pages for context
+
+In short:
+
+- support direct page navigation through an input field
+- validate the number before navigating
+- keep the current page context clear
+
+Likely files:
+
+- `apps/ui/frontend/src/components/BoundingBoxPreview.tsx`
+- `apps/ui/frontend/src/styles.css`
+- `apps/ui/frontend/src/components/BoundingBoxPreview.test.tsx`
+
+Good next step:
+
+- decide whether the input should commit on Enter, blur, or both
+- show invalid values clearly without breaking the current page state
 
 ## Suggested Next Session Plan
 
-1. Reproduce the five remaining issues in the live browser.
-2. Make the text-style tabs page-aware first because that changes the meaning of the thumbnail rail.
-3. Fix the background mismatch next because it is small and easy to verify.
-4. Add the hand tool mode after that and test it with a zoomed-in document.
-5. Remove the PDF footer text.
-6. Decouple thumbnail rotation from main-page rotation.
-7. Re-run targeted tests, build, and a live browser pass after each fix group.
+1. Reproduce all six remaining issues in the live browser before changing code.
+2. Fix the shared navigation problem first so page controls stay available on every page-aware tab.
+3. Add direct page input next, since that improves usability immediately for long documents.
+4. Fix the `HTML` full-height layout issue after that so all page-aware tabs share the same shell behavior.
+5. Rework the hand tool so it supports vertical movement and stays available at every zoom level with defined movement bounds.
+6. Constrain the thumbnail rail height and make it internally scrollable for long PDFs.
+7. Re-run targeted frontend tests, run the frontend build again, and finish with a live browser pass.
 
 ## Useful Commands
 

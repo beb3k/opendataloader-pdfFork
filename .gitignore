@@ -72,4 +72,7 @@ logs/
 # Configuration files
 .claude/settings.local.json
 .claude/plans/
+.code-review-graph/
 
+# Moat task system
+.moat/
